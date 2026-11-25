@@ -248,6 +248,7 @@ Tracked from the start and updated with every phase:
 - Secrets injected into Cloud Run are visible to anyone with view access to that service, including production. Each environment has its own values. Google Secret Manager is not used.
 - Docker Hub is the only registry. Cloud Run may cache Docker Hub images for up to an hour; deploys are pinned by digest.
 - Release tags are created by the production workflow with `GITHUB_TOKEN`, so they are not GPG-signed.
+- Until `ci.yml` exists (Phase 1), the `main` and `develop` rulesets require a pull request and signed commits but no status check.
 - The French, Spanish and Portuguese text needs a native-speaker review before launch (status in `messages/REVIEW.md`).
 
 ## Contributions
