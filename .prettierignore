@@ -1,0 +1,6 @@
+# Symlink to AGENTS.md (formatted once, through the target)
+CLAUDE.md
+
+# Copied verbatim from the owner's [origin-ui](https://github.com/m-oliveda/origin-ui_web) repository. Formatting it would rewrite its code
+# examples and make it drift from the source; update it only by copying the new upstream version.
+DESIGN.md

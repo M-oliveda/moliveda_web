@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Next.js build output and caches
+.next/
+out/
+build/
+.swc/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrets: only the names-only template is committed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+# Credential files written by google-github-actions/auth if a workflow ever runs in the worktree
+gha-creds-*.json
+
+# Test and quality reports
+coverage/
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+.lighthouseci/
+reports/
+.stryker-tmp/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editors: keep the shared VS Code settings, ignore personal ones
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+
+# Claude Code: settings.json is shared, local overrides are personal
+.claude/settings.local.json
+
+# OS files
+.DS_Store
+Thumbs.db

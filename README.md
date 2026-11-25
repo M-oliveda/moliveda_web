@@ -6,7 +6,7 @@ Personal portfolio of **Mauricio Oliveda**, a full-stack software developer. The
 
 ## Table of contents
 
-- [moliveda\_web](#moliveda_web)
+- [moliveda_web](#moliveda_web)
   - [Table of contents](#table-of-contents)
   - [Tools and technologies](#tools-and-technologies)
   - [Architecture](#architecture)
@@ -218,7 +218,7 @@ Copy `.env.example` to `.env` for local work. Never commit `.env`. In deployed e
 | `RATE_LIMIT_MAX_REQUESTS`        | server | no                               | `5` (default)                                                | Max contact submissions per client IP per window, per instance.                                                                                             |
 | `RATE_LIMIT_WINDOW_SECONDS`      | server | no                               | `600` (default)                                              | Rate limit window length.                                                                                                                                   |
 | `BASIC_AUTH_USERNAME`            | secret | gate only                        | any name without `:`                                         | Gate user name. Required on development, preview and staging. Optional only when `APP_ENV=local` and the password is also unset.                            |
-| `BASIC_AUTH_PASSWORD`            | secret | gate only                        | at most 72 bytes                                             | Gate password, bcrypt-hashed by the gate at start. Optional under the same rule as the user name. Wrap it in single quotes in `.env` if it contains `$`.   |
+| `BASIC_AUTH_PASSWORD`            | secret | gate only                        | at most 72 bytes                                             | Gate password, bcrypt-hashed by the gate at start. Optional under the same rule as the user name. Wrap it in single quotes in `.env` if it contains `$`.    |
 | `ORIGIN_VERIFY_SECRET`           | secret | production only                  | random, at least 32 bytes                                    | Value Cloudflare adds as `X-Origin-Verify`. Production answers `403` to requests without it (probes exempt). Stored in the `production` GitHub Environment. |
 | `ORIGIN_VERIFY_SECRET_PREVIOUS`  | secret | no                               | the previous value                                           | Accepted alongside the current value while the secret is rotated. Remove it afterwards.                                                                     |
 | `UPSTREAM`                       | gate   | no                               | `127.0.0.1:3000` (default), `web:3000` in Compose            | Where the gate forwards authenticated requests.                                                                                                             |
@@ -248,6 +248,7 @@ Tracked from the start and updated with every phase:
 - Secrets injected into Cloud Run are visible to anyone with view access to that service, including production. Each environment has its own values. Google Secret Manager is not used.
 - Docker Hub is the only registry. Cloud Run may cache Docker Hub images for up to an hour; deploys are pinned by digest.
 - Release tags are created by the production workflow with `GITHUB_TOKEN`, so they are not GPG-signed.
+- Until `ci.yml` exists (Phase 1), the `main` and `develop` rulesets require a pull request and signed commits but no status check.
 - The French, Spanish and Portuguese text needs a native-speaker review before launch (status in `messages/REVIEW.md`).
 
 ## Contributions

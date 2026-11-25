@@ -1,0 +1,18 @@
+version = 1
+SPDX-PackageName = "moliveda_web"
+SPDX-PackageSupplier = "Mauricio Oliveda"
+SPDX-PackageDownloadLocation = "https://github.com/M-oliveda/moliveda_web"
+
+# Source code: everything not listed in a later annotation.
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Mauricio Oliveda"
+SPDX-License-Identifier = "AGPL-3.0-only"
+
+# Personal content: the AGPL does not apply. Forks must replace these files.
+[[annotations]]
+path = ["messages/*/content/**", "public/profile/**", "public/cv/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Mauricio Oliveda"
+SPDX-License-Identifier = "LicenseRef-AllRightsReserved"
