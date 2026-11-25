@@ -1,0 +1,27 @@
+# Release note categories for `gh release create --generate-notes` (deploy-prod.yml).
+changelog:
+  categories:
+    - title: Features
+      labels:
+        - feature
+    - title: Fixes
+      labels:
+        - fix
+    - title: Security
+      labels:
+        - security
+    - title: Accessibility
+      labels:
+        - accessibility
+    - title: Documentation
+      labels:
+        - docs
+    - title: CI/CD and infrastructure
+      labels:
+        - ci
+    - title: Dependencies
+      labels:
+        - dependencies
+    - title: Other changes
+      labels:
+        - "*"
