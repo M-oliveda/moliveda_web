@@ -1,0 +1,17 @@
+# Only Docker for now: the npm and github-actions entries are added in Phase 1,
+# when package.json and .github/workflows/ exist (MASTERPLAN.md section 12).
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+    commit-message:
+      prefix: ":arrow_up:"
+    groups:
+      docker:
+        patterns:
+          - "*"
