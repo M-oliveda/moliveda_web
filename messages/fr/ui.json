@@ -1,0 +1,28 @@
+{
+  "skipLink": "Aller au contenu principal",
+  "nav": {
+    "label": "Principale",
+    "about": "À propos",
+    "experience": "Expérience",
+    "education": "Formation",
+    "skills": "Compétences"
+  },
+  "language": {
+    "label": "Langue",
+    "en": "English",
+    "es": "Español",
+    "pt": "Português",
+    "fr": "Français"
+  },
+  "theme": {
+    "label": "Thème",
+    "light": "Clair",
+    "dark": "Sombre",
+    "system": "Système"
+  },
+  "notFound": {
+    "title": "Page introuvable",
+    "description": "La page que vous cherchez n’existe pas ou a été déplacée.",
+    "home": "Aller à la page d’accueil"
+  }
+}

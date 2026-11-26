@@ -2,7 +2,7 @@
 
 Personal portfolio of **Mauricio Oliveda**, a full-stack software developer. The site helps future clients and companies understand his skills, experience and education. It is available in English (default), Spanish, Portuguese and French through path-based locales (`/en`, `/es`, `/pt`, `/fr`), picks the best language from the browser's `Accept-Language` header on the first visit, offers a resume viewer and download in each language, and includes a contact form that delivers email through Resend. It runs on Google Cloud Run behind Cloudflare at [moliveda.dev](https://moliveda.dev).
 
-> **Status:** Phase 1 (scaffold and quality tooling) is built: a blank Next.js 16 app with every quality gate, the Docker images, the NGINX basic-auth gate and CI. The pages come in later phases. The architecture, decisions and roadmap are in [`MASTERPLAN.md`](./MASTERPLAN.md).
+> **Status:** Phases 1 to 3 are built: the Next.js 16 app with every quality gate, the Docker images, the NGINX basic-auth gate, CI/CD to Cloud Run, and the i18n foundation (locale routing, typed messages, structured logging, theme and motion providers). The pages come in Phase 4. The architecture, decisions and roadmap are in [`MASTERPLAN.md`](./MASTERPLAN.md).
 
 ## Table of contents
 
@@ -66,6 +66,16 @@ client ─► [ nginx gate :8080, basic auth ] ─► [ next app :3000 ]
 
 All text a visitor reads, UI strings and personal content, lives in `messages/{locale}/` and is loaded through next-intl. See `MASTERPLAN.md` section 4 for the full design.
 
+**Locale routing.** `src/proxy.ts` runs on every request: first the production origin guard, then the correlation id, then next-intl for page paths (APIs, probes, `/_next`, `/.well-known` and files are skipped).
+
+- `/` and any unprefixed page answer `307` to `/en`, `/es`, `/pt` or `/fr`. The locale is chosen from the `NEXT_LOCALE` cookie, then `Accept-Language`, then English.
+- The redirect is sent with `Cache-Control: private, no-store` and `Vary: Accept-Language, Cookie`, so no shared cache stores it.
+- Opening a locale sets the cookie for one year (`SameSite=Lax`, `Secure` outside local runs).
+
+**Messages.** Messages are typed from `messages/en/`. A missing key fails the typecheck. A key missing in another locale fails the parity test and `next build`. In a running server, a missing message logs a warning and renders the English text.
+
+**Correlation id.** Every response carries an `X-Correlation-ID`.
+
 ## Getting started
 
 ### Requirements
@@ -96,7 +106,7 @@ In VS Code, install the recommended extensions (Prettier and markdownlint) when 
 | `npm run build`         | Create the production build                                             |
 | `npm run start`         | Serve the production build with the standalone server (as in the image) |
 | `npm run verify`        | Run every gate below in order (what CI and the definition of done use)  |
-| `npm run lint`          | Run ESLint on the whole project (zero warnings)                         |
+| `npm run lint`          | Run `next typegen`, then ESLint on the whole project (zero warnings)    |
 | `npm run format`        | Format all files with Prettier                                          |
 | `npm run format:check`  | Check formatting without writing                                        |
 | `npm run typecheck`     | Run `next typegen && tsc --noEmit`                                      |
@@ -216,6 +226,7 @@ Copy `.env.example` to `.env` for local work. Never commit `.env`. In deployed e
 | -------------------------------- | ------ | -------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `APP_ENV`                        | server | yes                              | `local`, `development`, `preview`, `staging`, `production`   | Active environment. Non-production values add `noindex` headers and `Disallow: /` in `robots.txt`.                                                          |
 | `LOG_LEVEL`                      | server | no                               | `info` (default), `warn`, `error`, `debug`                   | Pino log level. Keep `debug` off in production.                                                                                                             |
+| `GCP_PROJECT_ID`                 | server | no                               | `moliveda-gcloudprojects-dev`                                | Links log lines to Cloud Trace (`logging.googleapis.com/trace`). Set by the deploy from the environment's project; leave empty locally.                     |
 | `PORT`                           | server | no                               | `3000` locally and behind the gate, `8080` in production     | Port the server listens on.                                                                                                                                 |
 | `NEXT_PUBLIC_SITE_URL`           | public | yes                              | `https://moliveda.dev`                                       | Canonical base URL for metadata, sitemap, Open Graph and the contact `Origin` check.                                                                        |
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | public | yes                              | Cloudflare site key                                          | Turnstile widget key. Cloudflare's documented test key locally and in CI only.                                                                              |
@@ -236,7 +247,7 @@ Copy `.env.example` to `.env` for local work. Never commit `.env`. In deployed e
 
 The app validates these with Zod and **refuses to start** in any non-local environment if a required value is missing. The gate fails closed too: it refuses to start without both credentials, unless `APP_ENV=local` and both are unset, in which case it starts with basic auth disabled. Setting only one of the two is always an error.
 
-CI/CD also uses repository and environment settings that are not app variables: `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `GCP_REGION`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`. They are listed in `MASTERPLAN.md` section 10.3. Image pushes use the same Workload Identity login, so there is no registry token.
+CI/CD also uses repository and environment settings that are not app variables: `GCP_PROJECT_ID` (also passed to the app container, see above), `GCP_PROJECT_NUMBER`, `GCP_REGION`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`. They are listed in `MASTERPLAN.md` section 10.3. Image pushes use the same Workload Identity login, so there is no registry token.
 
 ## Testing and quality
 
@@ -261,6 +272,8 @@ Tracked from the start and updated with every phase:
 - Release tags are created by the production workflow with `GITHUB_TOKEN`, so they are not GPG-signed.
 - The GCP Workload Identity binding is by repository name (`M-oliveda/moliveda_web`), not by numeric id or GitHub Environment, because the providers are shared with the owner's other projects. Renaming the repository needs `infra/gcp/bootstrap.sh` to run again. Only deploy jobs can request a token.
 - The French, Spanish and Portuguese text needs a native-speaker review before launch (status in `messages/REVIEW.md`).
+- `next-themes` injects a small inline script to set the theme before the page paints. The Content Security Policy in Phase 6 must allow it (hash or nonce) or accept `'unsafe-inline'` as a documented gap.
+- The 404 page for paths outside a locale uses Next.js `global-not-found.tsx`, which is still experimental in Next.js 16 (`experimental.globalNotFound`).
 
 ## Contributions
 

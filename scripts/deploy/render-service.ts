@@ -153,10 +153,14 @@ function requirePlannedImage(
   return expected;
 }
 
-/** The app container's variables. Origin secrets go to production only. */
+/**
+ * The app container's variables. Origin secrets go to production only. `GCP_PROJECT_ID` is not
+ * secret: it builds the Cloud Logging trace field (MASTERPLAN 4.10).
+ */
 export function appEnv(input: IRenderInput): IEnvVar[] {
   const vars: IEnvVar[] = [
     { name: "APP_ENV", value: input.plan.environment },
+    { name: "GCP_PROJECT_ID", value: input.projectId },
     ...present(input.env, APP_PASSTHROUGH_KEYS),
   ];
   if (input.plan.environment === "production") {

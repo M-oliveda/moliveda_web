@@ -199,8 +199,11 @@ jobs:
           }
           check 200 http://127.0.0.1:8081/health
           check 200 http://127.0.0.1:8081/ready
+          # The guard answers before the locale redirect.
           check 403 http://127.0.0.1:8081/
-          check 200 -H "X-Origin-Verify: $secret" http://127.0.0.1:8081/
+          check 403 http://127.0.0.1:8081/en
+          check 307 -H "X-Origin-Verify: $secret" http://127.0.0.1:8081/
+          check 200 -H "X-Origin-Verify: $secret" http://127.0.0.1:8081/en
       - name: Gate behavior
         run: scripts/test-gate.sh
       - name: Trivy (fixable critical findings fail)

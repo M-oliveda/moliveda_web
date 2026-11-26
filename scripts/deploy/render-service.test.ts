@@ -113,8 +113,22 @@ describe("renderService for a gated environment", () => {
       "BASIC_AUTH_USERNAME",
       "BASIC_AUTH_PASSWORD",
     ]);
-    expect(envNames(manifest, "app")).toStrictEqual(["APP_ENV"]);
+    expect(envNames(manifest, "app")).toStrictEqual([
+      "APP_ENV",
+      "GCP_PROJECT_ID",
+    ]);
     expect(JSON.stringify(manifest)).not.toContain(ORIGIN_SECRET);
+  });
+
+  it("passes the project id to the app for the log trace field", () => {
+    const app = manifest.spec.template.spec.containers.find(
+      (container) => container.name === "app"
+    );
+
+    expect(app?.env).toContainEqual({
+      name: "GCP_PROJECT_ID",
+      value: "moliveda-gcloudprojects-dev",
+    });
   });
 
   it("routes all traffic to the new revision", () => {
@@ -132,6 +146,7 @@ describe("renderService for a gated environment", () => {
 
     expect(envNames(rendered, "app")).toStrictEqual([
       "APP_ENV",
+      "GCP_PROJECT_ID",
       "EMAIL_DRIVER",
     ]);
   });
@@ -208,6 +223,7 @@ describe("renderService for production", () => {
     expect(app).not.toHaveProperty("command");
     expect(envNames(manifest, "app")).toStrictEqual([
       "APP_ENV",
+      "GCP_PROJECT_ID",
       "ORIGIN_VERIFY_SECRET",
       "ORIGIN_VERIFY_SECRET_PREVIOUS",
     ]);

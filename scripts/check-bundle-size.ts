@@ -52,9 +52,14 @@ export function routeFromHtmlPath(htmlPath: string): string {
   return path === "index" ? "/" : `/${path.replace(/\/index$/, "")}`;
 }
 
-/** Next.js internals (`/_not-found`, `/_global-error`) are not site routes. */
+/**
+ * Next.js internals (`/_not-found`, `/_global-error`) and the fallback shells of
+ * dynamic segments (`/[locale]`) are not routes a visitor loads.
+ */
 export function isSiteRoute(route: string): boolean {
-  return !route.split("/").some((segment) => segment.startsWith("_"));
+  return !route
+    .split("/")
+    .some((segment) => segment.startsWith("_") || segment.startsWith("["));
 }
 
 export function checkBudgets(

@@ -30,11 +30,28 @@ test.describe("origin guard in production", () => {
     expect(response.status()).toBe(403);
   });
 
-  test("a request with the secret is served", async ({ request }) => {
+  test("a request with the secret gets the locale redirect", async ({
+    request,
+  }) => {
     const response = await request.get(`${PRODUCTION_URL}/`, {
+      headers: { "X-Origin-Verify": E2E_ORIGIN_SECRET },
+      maxRedirects: 0,
+    });
+
+    expect(response.status()).toBe(307);
+  });
+
+  test("a locale page with the secret is served", async ({ request }) => {
+    const response = await request.get(`${PRODUCTION_URL}/en`, {
       headers: { "X-Origin-Verify": E2E_ORIGIN_SECRET },
     });
 
     expect(response.status()).toBe(200);
+  });
+
+  test("a locale page without the header gets 403", async ({ request }) => {
+    const response = await request.get(`${PRODUCTION_URL}/en`);
+
+    expect(response.status()).toBe(403);
   });
 });
