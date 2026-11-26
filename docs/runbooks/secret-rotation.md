@@ -18,12 +18,6 @@ The app accepts `ORIGIN_VERIFY_SECRET` and, while rotating, `ORIGIN_VERIFY_SECRE
 
 The old credentials stop working when the new revision takes traffic. Share the new ones only with the people who review that environment.
 
-## Docker Hub tokens
-
-1. Create a new token with the same scope (`DOCKERHUB_TOKEN`: Read & Write; `DOCKERHUB_CLEANUP_TOKEN`: Read, Write & Delete).
-2. Update the repository secret.
-3. Revoke the old token on Docker Hub after the next successful run that uses it.
-
 ## If a secret leaked
 
 Rotate it first, as above, then check where it went. Secrets are injected at deploy time and are visible to anyone with view access to the Cloud Run service (`README.md`, "Known gaps"), so review that project's IAM members too.

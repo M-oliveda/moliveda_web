@@ -1,0 +1,12 @@
+[
+  {
+    "name": "delete-after-1d-v1",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "any", "olderThan": "1d" }
+  },
+  {
+    "name": "keep-newest-1-v1",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": { "keepCount": 1 }
+  }
+]
