@@ -18,8 +18,29 @@ export interface IRequestConfigDeps {
   readonly logger: IIntlLogger;
 }
 
+/**
+ * Logger that creates the real one on first use. `getLogger` validates the
+ * runtime environment, which `next build` does not have; strict mode throws
+ * instead of logging, so the build never creates it.
+ */
+export function createLazyIntlLogger(
+  factory: () => IIntlLogger = getLogger
+): IIntlLogger {
+  return {
+    warn(fields, message) {
+      factory().warn(fields, message);
+    },
+    error(fields, message) {
+      factory().error(fields, message);
+    },
+  };
+}
+
 function defaultDeps(): IRequestConfigDeps {
-  return { strict: isStrictIntlMode(process.env), logger: getLogger() };
+  return {
+    strict: isStrictIntlMode(process.env),
+    logger: createLazyIntlLogger(),
+  };
 }
 
 /** Messages and error handling for one request (MASTERPLAN 4.4). */

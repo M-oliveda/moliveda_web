@@ -3,7 +3,10 @@ import { IntlError, IntlErrorCode } from "next-intl";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MessageError } from "@/i18n/intl-errors";
-import { createRequestConfig } from "@/i18n/request-config";
+import {
+  createLazyIntlLogger,
+  createRequestConfig,
+} from "@/i18n/request-config";
 
 const missing = new IntlError(IntlErrorCode.MISSING_MESSAGE, "x");
 
@@ -38,12 +41,40 @@ describe("createRequestConfig", () => {
   });
 
   it("is strict under Vitest by default", async () => {
-    // The default logger validates the environment; do not rely on the shell.
-    vi.stubEnv("APP_ENV", "local");
     const config = await createRequestConfig("pt");
 
     expect(() => {
       config.onError(missing);
     }).toThrow(MessageError);
+  });
+
+  it("does not need the runtime environment by default", async () => {
+    // As in `next build`: no APP_ENV.
+    vi.stubEnv("APP_ENV", "");
+    const config = await createRequestConfig("en");
+
+    expect(config.locale).toBe("en");
+  });
+});
+
+describe("createLazyIntlLogger", () => {
+  it("creates the logger only on first use and delegates to it", () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const factory = vi.fn(() => logger);
+    const lazy = createLazyIntlLogger(factory);
+
+    expect(factory).not.toHaveBeenCalled();
+
+    lazy.warn({ code: "a" }, "Missing message");
+    lazy.error({ code: "b" }, "Message error");
+
+    expect(logger.warn).toHaveBeenCalledWith({ code: "a" }, "Missing message");
+    expect(logger.error).toHaveBeenCalledWith({ code: "b" }, "Message error");
+  });
+
+  it("defaults to the shared logger", () => {
+    expect(() => {
+      createLazyIntlLogger();
+    }).not.toThrow();
   });
 });
