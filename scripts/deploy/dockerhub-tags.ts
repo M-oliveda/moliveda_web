@@ -36,18 +36,25 @@ export class DockerHubError extends Error {
   }
 }
 
+// `<sha>-<run id>-<run attempt>` (10.4). The suffix is optional so that tags pushed before it
+// existed (`<sha>` alone) are still cleaned up.
+const BUILD_ID = String.raw`[0-9a-f]{12}(?:-[1-9][0-9]*-[1-9][0-9]*)?`;
+const ENVIRONMENT_TAG = new RegExp(
+  `^(development|staging|production)-${BUILD_ID}$`
+);
+const PREVIEW_TAG = new RegExp(`^pr-[1-9][0-9]*-${BUILD_ID}$`);
+const GATE_TAG = new RegExp(`^${BUILD_ID}$`);
+
 /** The retention group of a tag, or `undefined` for tags that are always kept. */
 export function tagGroup(name: string): string | undefined {
-  const environment = /^(development|staging|production)-[0-9a-f]{12}$/.exec(
-    name
-  );
+  const environment = ENVIRONMENT_TAG.exec(name);
   if (environment) {
     return environment[1];
   }
-  if (/^pr-[1-9][0-9]*-[0-9a-f]{12}$/.test(name)) {
+  if (PREVIEW_TAG.test(name)) {
     return "preview";
   }
-  if (/^[0-9a-f]{12}$/.test(name)) {
+  if (GATE_TAG.test(name)) {
     return "gate";
   }
   return undefined;

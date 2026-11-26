@@ -36,6 +36,13 @@ describe("tagGroup", () => {
     ["latest", undefined],
     [`pr-0-${SHA}`, undefined],
     [`development-${SHA}0`, undefined],
+    [`development-${SHA}-16000000001-1`, "development"],
+    [`production-${SHA}-16000000001-12`, "production"],
+    [`pr-12-${SHA}-16000000001-2`, "preview"],
+    [`${SHA}-16000000001-1`, "gate"],
+    [`${SHA}-16000000001`, undefined],
+    [`${SHA}-0-1`, undefined],
+    [`pr-12-${SHA}-16000000001-1-extra`, undefined],
   ])("%s belongs to %s", (name, group) => {
     expect(tagGroup(name)).toBe(group);
   });
@@ -46,6 +53,8 @@ describe("selectPreviewTags", () => {
     const tags: ITag[] = [
       { name: `pr-1-${SHA}`, lastUpdated: daysAgo(1) },
       { name: `pr-1-${sha(2)}`, lastUpdated: daysAgo(1) },
+      { name: `pr-1-${sha(3)}-16000000001-1`, lastUpdated: daysAgo(1) },
+      { name: `pr-12-${SHA}-16000000001-1`, lastUpdated: daysAgo(1) },
       { name: `pr-12-${SHA}`, lastUpdated: daysAgo(1) },
       { name: `development-${SHA}`, lastUpdated: daysAgo(1) },
       { name: "pr-1-notasha", lastUpdated: daysAgo(1) },
@@ -54,6 +63,7 @@ describe("selectPreviewTags", () => {
     expect(selectPreviewTags(tags, 1)).toStrictEqual([
       `pr-1-${SHA}`,
       `pr-1-${sha(2)}`,
+      `pr-1-${sha(3)}-16000000001-1`,
     ]);
   });
 });
