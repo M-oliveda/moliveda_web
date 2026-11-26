@@ -161,6 +161,39 @@ jobs:
           docker logs runner
           echo "::error::/health did not answer within 30 s"
           exit 1
+      - name: The runner fails closed and guards the origin in production
+        run: |
+          # No APP_ENV, then production without the origin secret: both must refuse to start.
+          for args in "" "-e APP_ENV=production"; do
+            # shellcheck disable=SC2086 # word splitting of $args is intended
+            if timeout 60 docker run --rm $args moliveda-web:ci; then
+              echo "::error::the runner started with an invalid configuration ($args)"
+              exit 1
+            fi
+          done
+          # A throwaway value generated for this job only.
+          secret="$(openssl rand -hex 32)"
+          docker run -d --name runner-prod -p 8081:8080 \
+            -e APP_ENV=production -e ORIGIN_VERIFY_SECRET="$secret" moliveda-web:ci
+          for _ in $(seq 1 30); do
+            curl --silent --fail http://127.0.0.1:8081/ready > /dev/null && break
+            sleep 1
+          done
+          check() {
+            local expected="$1"
+            shift
+            local status
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' "$@")"
+            if [ "$status" != "$expected" ]; then
+              docker logs runner-prod
+              echo "::error::expected $expected, got $status"
+              exit 1
+            fi
+          }
+          check 200 http://127.0.0.1:8081/health
+          check 200 http://127.0.0.1:8081/ready
+          check 403 http://127.0.0.1:8081/
+          check 200 -H "X-Origin-Verify: $secret" http://127.0.0.1:8081/
       - name: Gate behavior
         run: scripts/test-gate.sh
       - name: Trivy (fixable critical findings fail)
