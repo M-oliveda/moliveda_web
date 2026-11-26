@@ -197,9 +197,12 @@ These environments do **not** use Docker Compose. They run on **Google Cloud Run
 - Deploys run only after the single required check, `CI passed`, succeeds.
 - Images are pushed to public Docker Hub repositories and deployed to Cloud Run by digest. Production rolls out as a no-traffic candidate revision, is smoke-tested, then receives traffic.
 - Development, preview and staging scale to zero (`min-instances 0`). Production runs with `min-instances 1` so one instance stays online.
-- Every secret, including production runtime secrets, is a GitHub Environment secret. The environments are `develop`, `preview`, `staging` and `production`. Google Secret Manager is not used. Gate credentials differ in each non-production environment.
+- Every secret, including production runtime secrets, is a GitHub Environment secret. The environments are `develop`, `preview`, `staging` and `production`. Google Secret Manager is not used. The three gated environments share one gate login (owner decision), so rotating it means updating all three.
 - **Releasing:** bump the version on a `release/x.y.z` branch (`npm version x.y.z --no-git-tag-version`), verify it on staging, then merge into `main`. The production workflow deploys, smoke-tests and only then creates the `vX.Y.Z` tag and GitHub Release.
 - **Rollback:** send traffic back to the previous Cloud Run revision with `gcloud run services update-traffic`. The full commands are in `MASTERPLAN.md` section 10.7 and `docs/runbooks/`.
+- **How a deploy works:** `build-push-deploy.yml` computes names, tags and URLs with `scripts/deploy/deploy-plan.ts`, renders the Cloud Run manifest with `scripts/deploy/render-service.ts` (secrets go into that file only, never onto a command line), applies it with `gcloud run services replace`, and runs `scripts/deploy/smoke.ts`. Gated services run the gate on `:8080` in front of the app on `:3000`.
+- **Setup:** the GCP projects are prepared once with `infra/gcp/bootstrap.sh` and checked with the read-only `infra/gcp/check.sh` (see [infra/gcp/README.md](infra/gcp/README.md)). The GitHub variables and secrets, the first deploys and the gate check are in [docs/runbooks/first-deploy.md](docs/runbooks/first-deploy.md).
+- **Runbooks:** [docs/runbooks/](docs/runbooks/README.md) covers rollback, secret rotation and cost.
 
 `MASTERPLAN.md` sections 10.1 to 10.7 describe the full pipeline, the Cloudflare setup and the GCP bootstrap.
 
@@ -233,7 +236,7 @@ Copy `.env.example` to `.env` for local work. Never commit `.env`. In deployed e
 
 The app validates these with Zod and **refuses to start** in any non-local environment if a required value is missing. The gate fails closed too: it refuses to start without both credentials, unless `APP_ENV=local` and both are unset, in which case it starts with basic auth disabled. Setting only one of the two is always an error.
 
-CI/CD also uses repository and environment settings that are not app variables: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_CLEANUP_TOKEN`, `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`. They are listed in `MASTERPLAN.md` section 10.3.
+CI/CD also uses repository and environment settings that are not app variables: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_CLEANUP_TOKEN`, `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `GCP_REGION`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`. They are listed in `MASTERPLAN.md` section 10.3.
 
 ## Testing and quality
 
@@ -241,6 +244,7 @@ CI/CD also uses repository and environment settings that are not app variables: 
 - **End to end:** Playwright against the production build, with axe on every page, locale and theme, a keyboard walk that checks every focus ring, visual snapshots, a CSP violation check and a run with JavaScript disabled.
 - **Performance:** Lighthouse CI on the production build. Accessibility, Best Practices and SEO must be 100 and CLS under 0.05; Performance targets 95.
 - **Containers:** CI boots the production image as non-root and runs `scripts/test-gate.sh` against the gate.
+- **Infrastructure and deploys:** the `infra/gcp/` scripts run in Vitest against a fake `gcloud` (the drift check must never call a mutating command), the deploy helpers in `scripts/deploy/` have unit tests, and `actionlint` checks every workflow in CI.
 - **Accessibility target:** WCAG 2.2 AA.
 
 - **Bundle size:** `npm run check:bundle` compares the gzipped JavaScript that each route loads on first visit with `bundle-budget.json`. A budget is raised only in a reviewed change.
@@ -255,7 +259,7 @@ Tracked from the start and updated with every phase:
 - Secrets injected into Cloud Run are visible to anyone with view access to that service, including production. Each environment has its own values. Google Secret Manager is not used.
 - Docker Hub is the only registry. Cloud Run may cache Docker Hub images for up to an hour; deploys are pinned by digest.
 - Release tags are created by the production workflow with `GITHUB_TOKEN`, so they are not GPG-signed.
-- Until `ci.yml` exists (Phase 1), the `main` and `develop` rulesets require a pull request and signed commits but no status check.
+- The GCP Workload Identity binding is by repository name (`M-oliveda/moliveda_web`), not by numeric id or GitHub Environment, because the providers are shared with the owner's other projects. Renaming the repository needs `infra/gcp/bootstrap.sh` to run again. Only deploy jobs can request a token.
 - The French, Spanish and Portuguese text needs a native-speaker review before launch (status in `messages/REVIEW.md`).
 
 ## Contributions
