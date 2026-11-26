@@ -29,6 +29,7 @@ env:
   # Pinned by tag and digest, like the Dockerfile base images.
   GITLEAKS_IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
   TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
 jobs:
   quality:
@@ -75,6 +76,11 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)"
           -v "$GITHUB_WORKSPACE:/repo" -w /repo "$GITLEAKS_IMAGE"
           git --redact --no-banner --verbose .
+      # Workflow syntax, expressions and the embedded shell scripts (shellcheck).
+      - name: actionlint
+        run: >
+          docker run --rm --user "$(id -u):$(id -g)"
+          -v "$GITHUB_WORKSPACE:/repo" -w /repo "$ACTIONLINT_IMAGE" -color
       - name: REUSE compliance
         uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0
       - name: Dependency review
