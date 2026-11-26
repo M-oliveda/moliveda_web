@@ -128,17 +128,26 @@ jobs:
           subject-digest: ${{ steps.gate.outputs.digest }}
           push-to-registry: true
 
-      # Cloud Run deploys by digest, never by tag (10.4).
+      # The manifest names each image by its run-unique tag: Cloud Run reports a just-pushed
+      # Docker Hub digest as not found, but resolves a new tag to its digest when it creates the
+      # revision. "Verify image digests" then checks that digest (10.4). `app` and `gate` stay
+      # pinned by digest for the release tag and the summary.
       - name: Image references
         id: images
         env:
           APP_DIGEST: ${{ steps.app.outputs.digest }}
           GATE_DIGEST: ${{ steps.gate.outputs.digest }}
+          APP_TAG: ${{ steps.plan.outputs.app_tag }}
+          GATE_TAG: ${{ steps.plan.outputs.gate_tag }}
         run: |
-          echo "app=docker.io/${DOCKERHUB_USERNAME}/moliveda-web@${APP_DIGEST}" >> "$GITHUB_OUTPUT"
-          if [ -n "$GATE_DIGEST" ]; then
-            echo "gate=docker.io/${DOCKERHUB_USERNAME}/moliveda-web-gate@${GATE_DIGEST}" >> "$GITHUB_OUTPUT"
-          fi
+          {
+            echo "app=docker.io/${DOCKERHUB_USERNAME}/moliveda-web@${APP_DIGEST}"
+            echo "app_tagged=docker.io/${DOCKERHUB_USERNAME}/moliveda-web:${APP_TAG}"
+            if [ -n "$GATE_DIGEST" ]; then
+              echo "gate=docker.io/${DOCKERHUB_USERNAME}/moliveda-web-gate@${GATE_DIGEST}"
+              echo "gate_tagged=docker.io/${DOCKERHUB_USERNAME}/moliveda-web-gate:${GATE_TAG}"
+            fi
+          } >> "$GITHUB_OUTPUT"
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -165,8 +174,8 @@ jobs:
       # (AGENTS.md). render-service.ts sends each one only to the container that needs it.
       - name: Render the service manifest
         env:
-          APP_IMAGE: ${{ steps.images.outputs.app }}
-          GATE_IMAGE: ${{ steps.images.outputs.gate }}
+          APP_IMAGE: ${{ steps.images.outputs.app_tagged }}
+          GATE_IMAGE: ${{ steps.images.outputs.gate_tagged }}
           CURRENT_REVISION: ${{ steps.current.outputs.revision }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           EMAIL_DRIVER: ${{ vars.EMAIL_DRIVER }}
@@ -189,6 +198,26 @@ jobs:
       - name: Delete the manifest
         if: always()
         run: rm -f "$RUNNER_TEMP/service.yaml" "$RUNNER_TEMP/current.json"
+
+      # Each container of the new revision must run the digest pushed above, never an earlier
+      # build that a cached tag still points to. Runs before any smoke test or traffic change.
+      - name: Verify image digests
+        env:
+          REVISION: ${{ steps.plan.outputs.revision }}
+          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          GATE_DIGEST: ${{ steps.gate.outputs.digest }}
+        run: |
+          gcloud run revisions describe "$REVISION" --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID" --format=json > "$RUNNER_TEMP/revision.json"
+          docker buildx imagetools inspect --raw \
+            "docker.io/${DOCKERHUB_USERNAME}/moliveda-web@${APP_DIGEST}" > "$RUNNER_TEMP/app-index.json"
+          args=("$RUNNER_TEMP/revision.json" "app=${APP_DIGEST}=$RUNNER_TEMP/app-index.json")
+          if [ -n "$GATE_DIGEST" ]; then
+            docker buildx imagetools inspect --raw \
+              "docker.io/${DOCKERHUB_USERNAME}/moliveda-web-gate@${GATE_DIGEST}" > "$RUNNER_TEMP/gate-index.json"
+            args+=("gate=${GATE_DIGEST}=$RUNNER_TEMP/gate-index.json")
+          fi
+          node scripts/deploy/verify-digests.ts "${args[@]}"
 
       - name: Smoke test (gated)
         if: steps.plan.outputs.gated == 'true'
