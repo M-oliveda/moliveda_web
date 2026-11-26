@@ -42,7 +42,14 @@ export default defineConfig([
       ],
       "@typescript-eslint/naming-convention": [
         "error",
-        { selector: "interface", format: ["PascalCase"], prefix: ["I"] },
+        {
+          selector: "interface",
+          format: ["PascalCase"],
+          prefix: ["I"],
+          // Module augmentation must reuse the library's interface name
+          // (next-intl's `AppConfig`, src/types/next-intl.d.ts).
+          filter: { regex: "^AppConfig$", match: false },
+        },
       ],
     },
   },

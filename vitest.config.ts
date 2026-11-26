@@ -25,6 +25,13 @@ export default defineConfig({
     ],
     exclude: [...configDefaults.exclude, "e2e/**"],
     restoreMocks: true,
+    server: {
+      deps: {
+        // next-intl imports `next/server` without an extension, which Node's
+        // ESM loader cannot resolve; let Vite transform it instead.
+        inline: ["next-intl"],
+      },
+    },
     coverage: {
       provider: "v8",
       include: ["src/**/*.{ts,tsx}"],
@@ -41,6 +48,7 @@ export default defineConfig({
         // Components cannot render in Vitest; Playwright exercises them.
         "src/app/**/page.tsx",
         "src/app/**/layout.tsx",
+        "src/app/global-not-found.tsx",
         // Probe wrappers: `connection()` needs a live request scope. The
         // responses come from src/lib/health.ts (tested); Playwright and the
         // docker job call the routes themselves.
