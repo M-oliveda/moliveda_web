@@ -63,7 +63,7 @@ Key documents (read them before working):
 
 ### This is not the Next.js you know
 
-Next.js 16 has breaking changes (APIs, conventions, file structure) compared with most training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing Next.js code, and heed deprecation notices. Examples that matter here: `proxy.ts` replaces `middleware.ts`; `cacheComponents` makes probes and runtime-dependent routes call `await connection()`; `images.qualities` defaults to `[75]`, so list every quality the site uses; `error.tsx` receives `retry` (preferred) as well as `reset`. Verify other libraries against their current docs too (the `ctx7` CLI or the official site), never from memory.
+Next.js 16 has breaking changes (APIs, conventions, file structure) compared with most training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing Next.js code, and heed deprecation notices. Examples that matter here: `proxy.ts` replaces `middleware.ts`; `cacheComponents` makes probes and runtime-dependent routes call `await connection()`; `images.qualities` defaults to `[75]`, so list every quality the site uses; `error.tsx` receives `retry` (preferred) as well as `reset`. Verify other libraries and services against their current official docs too (documentation MCP tools, the `ctx7` CLI or the official site, see "AI Skills and Custom Tools"), never from memory.
 
 ### Size the task, then plan
 
@@ -175,8 +175,8 @@ A task is done only when all of these hold:
 
 - No project-specific skills yet. Planned (Phase 8): `verify` (runs `npm run verify` in the container and reports each result), `add-locale-string` (adds a key to all four locales and flags French for review), `release` (walks the release steps and stops before every Git write). They will live in `.claude/skills/` and be listed here.
 - Tool allowlist: read and edit files in this repository, run scripts through Docker Compose, run `scripts/test-gate.sh`, read-only git commands. Everything else (git writes, network deploys, cloud CLIs) needs human approval.
-- Documentation lookups: the `ctx7` CLI (Context7) and official documentation sites are allowed for current library and cloud docs. Never include repository secrets or personal data in queries.
-- MCP servers: none required. Do not connect to external services that send repository data elsewhere without approval.
+- **Documentation lookups are mandatory.** Before planning, coding or diagnosing anything that involves a library, framework, CLI, GitHub feature or cloud service (Next.js, GitHub Actions, Cloud Run, Docker Hub, Cloudflare, Resend and so on), search its **official documentation** for the latest recommendations. Use the documentation MCP tools available in the session first (for example the Context7 MCP server), then the `ctx7` CLI, then the official documentation site. Cite the page each recommendation comes from in the plan or report, and say so when the docs are silent and a conclusion rests on observed behavior instead. Never include repository secrets or personal data in queries.
+- MCP servers: documentation MCP servers (Context7 and official vendor documentation servers) are allowed for the lookups above. Do not connect to other external services that send repository data elsewhere without approval.
 
 ## Security and Compliance
 
