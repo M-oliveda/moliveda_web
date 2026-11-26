@@ -269,8 +269,8 @@ describe("runChecks", () => {
     const [thrown] = await runChecks(
       BASE_URL,
       smokeChecks("production", { originSecret: ORIGIN_SECRET }).slice(0, 1),
-      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a non-Error rejection
-      options(() => Promise.reject("boom"), 1)
+      // A fetch that rejects with a non-Error value.
+      options(vi.fn<typeof fetch>().mockRejectedValue("boom"), 1)
     );
     expect(thrown?.detail).toBe("request failed");
   });

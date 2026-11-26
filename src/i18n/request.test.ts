@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { IAppRequestConfig } from "@/i18n/request-config";
 
@@ -29,6 +29,12 @@ describe("i18n request config", () => {
   beforeEach(() => {
     rootLocale.mockReset();
     notFound.mockClear();
+    // The default logger validates the environment; do not rely on the shell.
+    vi.stubEnv("APP_ENV", "local");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("uses the [locale] root param", async () => {

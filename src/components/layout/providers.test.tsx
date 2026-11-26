@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { domAnimation, m } from "framer-motion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { loadMotionFeatures, Providers } from "@/components/layout/providers";
 
@@ -21,7 +21,27 @@ function preferColorScheme(scheme: "light" | "dark"): void {
   );
 }
 
+// next-themes renders an inline script that sets the theme class before the
+// first paint. It only runs when server-rendered, so React warns when the
+// tests render it on the client. Silence that one warning; let others through.
+const SCRIPT_TAG_WARNING = "Encountered a script tag";
+
+function silenceThemeScriptWarning(): void {
+  const originalError = console.error;
+  vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    const [message] = args;
+    if (typeof message === "string" && message.includes(SCRIPT_TAG_WARNING)) {
+      return;
+    }
+    originalError(...args);
+  });
+}
+
 describe("Providers", () => {
+  beforeEach(() => {
+    silenceThemeScriptWarning();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     document.documentElement.className = "";
