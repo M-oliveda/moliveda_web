@@ -48,7 +48,12 @@ unset gate_user gate_pass
 
 The Turnstile, Resend, contact and analytics values in `MASTERPLAN.md` 10.3 come with Phases 5 and 7.
 
-**Branch policy of `preview`:** allow `feature/*` and `hotfix/*` (the pull request branches, 10.3), plus `develop` and `main`. GitHub may match the closing event of a merged pull request against the base branch (`develop`), and `scheduled.yml` deletes stale previews from `main`. Check the first merged pull request's cleanup run. If it ran under `feature/*` alone, you can remove `develop` again.
+**Branch policy of `preview`:** allow `refs/pull/*/merge`, `develop` and `main` (10.3). GitHub matches the rule against `GITHUB_REF`, not the pull request's head branch. An open pull request's run has `refs/pull/<number>/merge`, the closing event of a merged pull request has the base branch (`develop`), and `scheduled.yml` deletes stale previews from `main`. A `feature/*` rule alone fails with `Branch "refs/pull/<number>/merge" is not allowed to deploy to preview due to environment protection rules`.
+
+```sh
+gh api -X POST repos/M-oliveda/moliveda_web/environments/preview/deployment-branch-policies \
+  -f name='refs/pull/*/merge' -f type=branch
+```
 
 ## 4. First preview
 
@@ -76,11 +81,13 @@ jsonPayload.component="gate"
 
 ## Troubleshooting
 
-| Symptom                                                             | Cause and fix                                                                                                                                                                                                                                |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `google-github-actions/auth`: `unauthorized` or `permission denied` | The Workload Identity binding or the provider's `attribute.repository` mapping is missing, or the repository was renamed (update `GITHUB_REPOSITORY` in `infra/gcp/config.sh` and run `bootstrap.sh` again). Run `infra/gcp/check.sh <env>`. |
-| `Permission 'iam.serviceaccounts.actAs' denied`                     | The deployer lacks `roles/iam.serviceAccountUser` on `moliveda-web-runtime`. Run `bootstrap.sh <env>`.                                                                                                                                       |
-| The deploy is refused on `invoker-iam-disabled`                     | An organization policy (`constraints/run.requireInvokerIam`) forbids public services. It has to be lifted for the project, because the gate does the authentication.                                                                         |
-| The deploy says the image platform is unsupported                   | Cloud Run rejected the image index (the provenance and SBOM attestations). Deploy the `linux/amd64` manifest digest instead (`docker buildx imagetools inspect`).                                                                            |
-| The app container never becomes ready                               | Read its logs: `env.ts` lists missing keys by name. `APP_ENV` comes from the manifest, so a missing value means a missing GitHub variable or secret.                                                                                         |
-| The smoke test fails on `401`                                       | The gate didn't start with credentials. Check both `BASIC_AUTH_*` secrets exist in that environment.                                                                                                                                         |
+| Symptom                                                             | Cause and fix                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `google-github-actions/auth`: `unauthorized` or `permission denied` | The Workload Identity binding or the provider's `attribute.repository` mapping is missing, or the repository was renamed (update `GITHUB_REPOSITORY` in `infra/gcp/config.sh` and run `bootstrap.sh` again). Run `infra/gcp/check.sh <env>`.           |
+| `Permission 'iam.serviceaccounts.actAs' denied`                     | The deployer lacks `roles/iam.serviceAccountUser` on `moliveda-web-runtime`. Run `bootstrap.sh <env>`.                                                                                                                                                 |
+| The deploy is refused on `invoker-iam-disabled`                     | An organization policy (`constraints/run.requireInvokerIam`) forbids public services. It has to be lifted for the project, because the gate does the authentication.                                                                                   |
+| `Image 'mirror.gcr.io/…@sha256:…' not found`                        | The manifest named an image by digest. Cloud Run pulls Docker Hub through `mirror.gcr.io`, which may not know a just-pushed digest yet. `render-service.ts` only accepts the run's tags (`MASTERPLAN.md` 10.4); re-run the job, which pushes new tags. |
+| The deploy says the image platform is unsupported                   | Cloud Run rejected the image index (the provenance and SBOM attestations). Deploy the `linux/amd64` manifest digest instead (`docker buildx imagetools inspect`).                                                                                      |
+| The app container never becomes ready                               | Read its logs: `env.ts` lists missing keys by name. `APP_ENV` comes from the manifest, so a missing value means a missing GitHub variable or secret.                                                                                                   |
+| `Verify image digests` fails with `runs sha256:…, expected …`       | A container runs another build than the one this run pushed, for example through a reused tag. Check the tags in the plan output, then re-run the job.                                                                                                 |
+| The smoke test fails on `401`                                       | The gate didn't start with credentials. Check both `BASIC_AUTH_*` secrets exist in that environment.                                                                                                                                                   |
