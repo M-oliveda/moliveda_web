@@ -1,0 +1,93 @@
+#!/bin/sh
+# Fake gcloud for infra/gcp/gcp.test.ts. It answers from the files in $STUB_STATE, applies the
+# mutating commands to those files (so a second bootstrap run sees its own changes) and records
+# every call in $STUB_LOG. It only knows the commands the scripts use; anything else fails.
+set -eu
+
+printf '%s\n' "$*" >> "$STUB_LOG"
+S="$STUB_STATE"
+
+# The real gcloud may prompt; the scripts must always run it with prompts disabled.
+if [ "${CLOUDSDK_CORE_DISABLE_PROMPTS:-}" != "1" ]; then
+    echo "gcloud stub: called with prompts enabled" >&2
+    exit 4
+fi
+
+# Value of --<name> in the arguments, in either `--name value` or `--name=value` form.
+opt() {
+    name="$1"
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --"$name")
+                printf '%s' "$2"
+                return
+                ;;
+            --"$name"=*)
+                printf '%s' "${1#*=}"
+                return
+                ;;
+        esac
+        shift
+    done
+}
+
+show() {
+    if [ -f "$S/$1" ]; then cat "$S/$1"; else exit 1; fi
+}
+
+show_or_empty() {
+    if [ -f "$S/$1" ]; then cat "$S/$1"; fi
+}
+
+case "$1 $2" in
+    "projects describe") show number ;;
+    "projects get-iam-policy") show_or_empty policy-project ;;
+    "projects add-iam-policy-binding")
+        printf '%s\t%s\n' "$(opt role "$@")" "$(opt member "$@")" >> "$S/policy-project"
+        ;;
+    "services list") show_or_empty apis ;;
+    "services enable") printf '%s\n' "$3" >> "$S/apis" ;;
+    "iam service-accounts")
+        case "$3" in
+            describe) grep -Fxq "$4" "$S/sas" 2> /dev/null || exit 1 ;;
+            list) show_or_empty sas ;;
+            create) printf '%s@%s.iam.gserviceaccount.com\n' "$4" "$(opt project "$@")" >> "$S/sas" ;;
+            get-iam-policy)
+                grep -Fxq "$4" "$S/sas" 2> /dev/null || exit 1
+                show_or_empty "policy-sa-$4"
+                ;;
+            add-iam-policy-binding)
+                printf '%s\t%s\n' "$(opt role "$@")" "$(opt member "$@")" >> "$S/policy-sa-$4"
+                ;;
+            *) exit 3 ;;
+        esac
+        ;;
+    "iam roles")
+        case "$3" in
+            describe)
+                [ -f "$S/role-perms" ] || exit 1
+                case "$*" in
+                    *includedPermissions*) paste -sd ';' "$S/role-perms" ;;
+                    *) printf 'projects/x/roles/%s\n' "$4" ;;
+                esac
+                ;;
+            create | update) sed -n 's/^  - //p' "$(opt file "$@")" > "$S/role-perms" ;;
+            *) exit 3 ;;
+        esac
+        ;;
+    "iam workload-identity-pools")
+        case "$3 ${4:-}" in
+            "providers describe") show provider.json ;;
+            "providers list") show_or_empty providers ;;
+            "list "*) show_or_empty pools ;;
+            *) exit 3 ;;
+        esac
+        ;;
+    "billing projects") show billing ;;
+    "billing budgets") show budgets ;;
+    *)
+        echo "gcloud stub: unhandled command: $*" >&2
+        exit 3
+        ;;
+esac
