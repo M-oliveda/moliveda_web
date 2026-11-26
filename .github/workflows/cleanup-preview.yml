@@ -1,0 +1,53 @@
+# Deletes a pull request's preview when it closes, merged or not (MASTERPLAN 10.2): the
+# `moliveda-web-pr-<n>` Cloud Run service, if it exists. scheduled.yml catches anything this
+# misses. Its images need no step: the preview repository's cleanup policy deletes them (10.4).
+name: Clean up preview
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [develop]
+
+permissions:
+  contents: read
+
+env:
+  HUSKY: "0"
+
+jobs:
+  cleanup:
+    name: "cleanup preview #${{ github.event.pull_request.number }}"
+    # Same conditions as deploy-preview.yml: only these pull requests ever had a preview.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      # Same group as the preview deploy in build-push-deploy.yml.
+      group: deploy-preview-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Delete the preview service
+        run: |
+          service="moliveda-web-pr-${PR_NUMBER}"
+          if gcloud run services describe "$service" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
+            --format='value(metadata.name)' > /dev/null 2>&1; then
+            gcloud run services delete "$service" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --quiet
+            echo "Deleted $service"
+          else
+            echo "$service does not exist"
+          fi

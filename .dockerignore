@@ -31,6 +31,7 @@ docs
 
 # Tests and reports
 e2e
+playwright.config.ts
 coverage
 playwright-report
 test-results

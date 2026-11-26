@@ -1,0 +1,22 @@
+# Custom role for the production deployer (MASTERPLAN 10.5 step 4). It can create, update and
+# re-route the Cloud Run service but never delete it. bootstrap.sh creates or updates it and
+# check.sh compares the live permissions with this list. Keep the list sorted.
+title: moliveda-web deployer (production)
+description: Deploys moliveda-web to Cloud Run. Cannot delete services.
+stage: GA
+includedPermissions:
+  - run.configurations.get
+  - run.configurations.list
+  - run.locations.list
+  - run.operations.get
+  - run.revisions.get
+  - run.revisions.list
+  - run.routes.get
+  - run.routes.list
+  - run.services.create
+  - run.services.get
+  - run.services.getIamPolicy
+  - run.services.list
+  # Needed to set `run.googleapis.com/invoker-iam-disabled` (public service, D34 guards it).
+  - run.services.setIamPolicy
+  - run.services.update

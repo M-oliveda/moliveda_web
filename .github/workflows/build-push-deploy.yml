@@ -1,0 +1,235 @@
+# Reusable: build, push, deploy and smoke-test one Cloud Run service (MASTERPLAN 10.2).
+# Called by deploy-preview.yml, deploy-env.yml and deploy-prod.yml, never directly. The service
+# settings come from scripts/deploy/deploy-plan.ts and the manifest from render-service.ts, so
+# this file only wires them together.
+name: Build, push and deploy
+
+on:
+  workflow_call:
+    inputs:
+      github_environment:
+        description: GitHub Environment holding the variables and secrets (develop, preview, staging, production)
+        type: string
+        required: true
+      deploy_environment:
+        description: APP_ENV of the service (development, preview, staging, production)
+        type: string
+        required: true
+      pr_number:
+        description: Pull request number, for previews only
+        type: string
+        required: false
+        default: ""
+    outputs:
+      url:
+        description: The service URL
+        value: ${{ jobs.deploy.outputs.url }}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: "deploy ${{ inputs.deploy_environment }}${{ inputs.pr_number != '' && format(' #{0}', inputs.pr_number) || '' }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Environment secrets reach this job because it names the environment (and the callers pass
+    # `secrets: inherit`). Branch policies and the production reviewer apply here.
+    environment:
+      name: ${{ inputs.github_environment }}
+      url: ${{ steps.plan.outputs.url }}
+    permissions:
+      contents: read
+      # Workload Identity Federation and the build provenance attestations.
+      id-token: write
+      attestations: write
+    concurrency:
+      # Same group as cleanup-preview.yml, so a cleanup never runs during a deploy.
+      group: deploy-${{ inputs.deploy_environment }}${{ inputs.pr_number != '' && format('-pr-{0}', inputs.pr_number) || '' }}
+      cancel-in-progress: false
+    outputs:
+      url: ${{ steps.plan.outputs.url }}
+    env:
+      HUSKY: "0"
+      DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # Names, tags and URLs. The run.app URL is deterministic, so it is known before the build.
+      - name: Plan
+        id: plan
+        run: node scripts/deploy/deploy-plan.ts
+
+      # Images go to the Artifact Registry repository of the environment's own project (10.4),
+      # so Cloud Run pulls them in-region without the Docker Hub cache. Workload Identity
+      # Federation authenticates the push too; gcloud's credential helper hands Docker a
+      # short-lived token, so no registry password exists anywhere.
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Docker credentials for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # NEXT_PUBLIC_* values are inlined at build time, so each environment gets its own image
+      # (4.7). Server secrets are never build arguments.
+      - name: Build and push the app image
+        id: app
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: runner
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.plan.outputs.app_image }}
+          build-args: |
+            APP_ENV=${{ inputs.deploy_environment }}
+            NEXT_PUBLIC_SITE_URL=${{ inputs.deploy_environment == 'production' && vars.NEXT_PUBLIC_SITE_URL || steps.plan.outputs.url }}
+            NEXT_PUBLIC_TURNSTILE_SITE_KEY=${{ vars.NEXT_PUBLIC_TURNSTILE_SITE_KEY }}
+            NEXT_PUBLIC_CF_BEACON_TOKEN=${{ vars.NEXT_PUBLIC_CF_BEACON_TOKEN }}
+          cache-from: type=gha,scope=app-${{ inputs.deploy_environment }}
+          cache-to: type=gha,mode=max,scope=app-${{ inputs.deploy_environment }}
+          provenance: mode=max
+          sbom: true
+      # The attestation stays in GitHub's attestation store (`gh attestation verify`), not in the
+      # registry, so the cleanup policies have nothing extra to keep track of.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.plan.outputs.registry }}/app
+          subject-digest: ${{ steps.app.outputs.digest }}
+          push-to-registry: false
+
+      # The gate has no environment-specific input, so it is tagged by build only (10.4).
+      - name: Build and push the gate image
+        id: gate
+        if: steps.plan.outputs.gated == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: gate
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.plan.outputs.gate_image }}
+          cache-from: type=gha,scope=gate
+          cache-to: type=gha,mode=max,scope=gate
+          provenance: mode=max
+          sbom: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: steps.plan.outputs.gated == 'true'
+        with:
+          subject-name: ${{ steps.plan.outputs.registry }}/gate
+          subject-digest: ${{ steps.gate.outputs.digest }}
+          push-to-registry: false
+
+      # Production keeps traffic on the revision serving it now until the candidate passes.
+      - name: Current production revision
+        id: current
+        if: inputs.deploy_environment == 'production'
+        env:
+          SERVICE: ${{ steps.plan.outputs.service }}
+        run: |
+          revision=""
+          if gcloud run services describe "$SERVICE" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
+            --format=json > "$RUNNER_TEMP/current.json" 2> /dev/null; then
+            revision="$(jq -r '[.status.traffic[]? | select(.percent == 100) | .revisionName][0] // ""' "$RUNNER_TEMP/current.json")"
+          fi
+          echo "Current revision: ${revision:-none (first deploy)}"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      # Secrets go from the environment into a 0600 manifest file, never onto a command line
+      # (AGENTS.md). render-service.ts sends each one only to the container that needs it.
+      - name: Render the service manifest
+        env:
+          APP_IMAGE: ${{ steps.plan.outputs.app_image }}
+          GATE_IMAGE: ${{ steps.plan.outputs.gated == 'true' && steps.plan.outputs.gate_image || '' }}
+          CURRENT_REVISION: ${{ steps.current.outputs.revision }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          EMAIL_DRIVER: ${{ vars.EMAIL_DRIVER }}
+          CONTACT_FROM_EMAIL: ${{ vars.CONTACT_FROM_EMAIL }}
+          CONTACT_TO_EMAIL: ${{ vars.CONTACT_TO_EMAIL }}
+          RATE_LIMIT_MAX_REQUESTS: ${{ vars.RATE_LIMIT_MAX_REQUESTS }}
+          RATE_LIMIT_WINDOW_SECONDS: ${{ vars.RATE_LIMIT_WINDOW_SECONDS }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          TURNSTILE_SECRET_KEY: ${{ secrets.TURNSTILE_SECRET_KEY }}
+          BASIC_AUTH_USERNAME: ${{ secrets.BASIC_AUTH_USERNAME }}
+          BASIC_AUTH_PASSWORD: ${{ secrets.BASIC_AUTH_PASSWORD }}
+          ORIGIN_VERIFY_SECRET: ${{ secrets.ORIGIN_VERIFY_SECRET }}
+          ORIGIN_VERIFY_SECRET_PREVIOUS: ${{ secrets.ORIGIN_VERIFY_SECRET_PREVIOUS }}
+        run: node scripts/deploy/render-service.ts "$RUNNER_TEMP/service.yaml"
+
+      - name: Deploy
+        run: |
+          gcloud run services replace "$RUNNER_TEMP/service.yaml" \
+            --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --quiet
+      - name: Delete the manifest
+        if: always()
+        run: rm -f "$RUNNER_TEMP/service.yaml" "$RUNNER_TEMP/current.json"
+
+      # Each container of the new revision must run the digest pushed above, never an earlier
+      # build that a cached tag still points to. Runs before any smoke test or traffic change.
+      - name: Verify image digests
+        env:
+          REVISION: ${{ steps.plan.outputs.revision }}
+          REGISTRY: ${{ steps.plan.outputs.registry }}
+          APP_DIGEST: ${{ steps.app.outputs.digest }}
+          GATE_DIGEST: ${{ steps.gate.outputs.digest }}
+        run: |
+          gcloud run revisions describe "$REVISION" --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID" --format=json > "$RUNNER_TEMP/revision.json"
+          docker buildx imagetools inspect --raw "${REGISTRY}/app@${APP_DIGEST}" > "$RUNNER_TEMP/app-index.json"
+          args=("$RUNNER_TEMP/revision.json" "app=${APP_DIGEST}=$RUNNER_TEMP/app-index.json")
+          if [ -n "$GATE_DIGEST" ]; then
+            docker buildx imagetools inspect --raw "${REGISTRY}/gate@${GATE_DIGEST}" > "$RUNNER_TEMP/gate-index.json"
+            args+=("gate=${GATE_DIGEST}=$RUNNER_TEMP/gate-index.json")
+          fi
+          node scripts/deploy/verify-digests.ts "${args[@]}"
+
+      - name: Smoke test (gated)
+        if: steps.plan.outputs.gated == 'true'
+        env:
+          URL: ${{ steps.plan.outputs.url }}
+          BASIC_AUTH_USERNAME: ${{ secrets.BASIC_AUTH_USERNAME }}
+          BASIC_AUTH_PASSWORD: ${{ secrets.BASIC_AUTH_PASSWORD }}
+        run: node scripts/deploy/smoke.ts gated "$URL"
+
+      # The candidate is reached through its tag URL with the origin header (D34). If this step
+      # fails, traffic never moved.
+      - name: Smoke test the production candidate
+        if: inputs.deploy_environment == 'production'
+        env:
+          URL: ${{ steps.plan.outputs.candidate_url }}
+          ORIGIN_VERIFY_SECRET: ${{ secrets.ORIGIN_VERIFY_SECRET }}
+        run: node scripts/deploy/smoke.ts production "$URL"
+      - name: Send production traffic to the candidate
+        if: inputs.deploy_environment == 'production'
+        env:
+          SERVICE: ${{ steps.plan.outputs.service }}
+        run: |
+          gcloud run services update-traffic "$SERVICE" --to-latest \
+            --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --quiet
+
+      - name: Service URL
+        env:
+          URL: ${{ steps.plan.outputs.url }}
+          REVISION: ${{ steps.plan.outputs.revision }}
+          APP_IMAGE: ${{ steps.plan.outputs.registry }}/app@${{ steps.app.outputs.digest }}
+        run: |
+          echo "Deployed $REVISION to $URL"
+          {
+            echo "### Deployed \`$DEPLOY_ENVIRONMENT\`"
+            echo ""
+            echo "- URL: $URL"
+            echo "- Revision: \`$REVISION\`"
+            echo "- App image: \`$APP_IMAGE\`"
+          } >> "$GITHUB_STEP_SUMMARY"

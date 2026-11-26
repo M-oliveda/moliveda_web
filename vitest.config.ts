@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import react from "@vitejs/plugin-react";
 import { configDefaults, defineConfig } from "vitest/config";
 
@@ -5,11 +7,22 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     tsconfigPaths: true,
+    // `server-only` throws outside the `react-server` condition; Vitest runs
+    // server modules directly, so it resolves to the package's empty build.
+    alias: {
+      "server-only": fileURLToPath(
+        new URL("node_modules/server-only/empty.js", import.meta.url)
+      ),
+    },
   },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.ts"],
+    include: [
+      "src/**/*.test.{ts,tsx}",
+      "scripts/**/*.test.ts",
+      "infra/**/*.test.ts",
+    ],
     exclude: [...configDefaults.exclude, "e2e/**"],
     restoreMocks: true,
     coverage: {
@@ -28,10 +41,11 @@ export default defineConfig({
         // Components cannot render in Vitest; Playwright exercises them.
         "src/app/**/page.tsx",
         "src/app/**/layout.tsx",
-        // Probe wrapper: `connection()` needs a live request scope. The response
-        // comes from src/lib/health.ts (tested); Playwright and the docker job
-        // call the route itself.
+        // Probe wrappers: `connection()` needs a live request scope. The
+        // responses come from src/lib/health.ts (tested); Playwright and the
+        // docker job call the routes themselves.
         "src/app/health/route.ts",
+        "src/app/ready/route.ts",
         // Boot hooks; the validation they trigger is tested in env.test.ts.
         "src/instrumentation.ts",
         "src/instrumentation.node.ts",

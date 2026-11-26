@@ -24,4 +24,4 @@ This is a personal project maintained by one person. Reports are handled on a be
 
 In scope: this repository and the site it deploys (`moliveda.dev`).
 
-Out of scope: denial-of-service and volume testing, social engineering, and vulnerabilities in third-party services (Cloudflare, Google Cloud, Resend, GitHub, Docker Hub), which should be reported to those vendors.
+Out of scope: denial-of-service and volume testing, social engineering, and vulnerabilities in third-party services (Cloudflare, Google Cloud, Resend, GitHub), which should be reported to those vendors.

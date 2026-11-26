@@ -1,0 +1,76 @@
+# Reusable: production release (MASTERPLAN 10.2, 10.7 and D29). Called by ci.yml after
+# `CI passed` on a push to main. It checks the version before anything is deployed, waits for
+# the owner's approval on the `production` environment, deploys a no-traffic candidate,
+# smoke-tests it, moves traffic, and only then creates the release tag and the GitHub Release.
+# This is the only place where release tags are created. Images get no version tag: the cleanup
+# policy keeps only the newest production images, and the release points at the commit (10.4).
+name: Deploy production
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: release version
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Check the version and that its tag does not exist
+        id: version
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::package.json version '$version' is not MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags "https://github.com/$REPOSITORY.git" "refs/tags/v$version" > /dev/null; then
+            echo "::error::v$version already exists. Bump the version on the release branch."
+            exit 1
+          fi
+          echo "Releasing v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: version
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-push-deploy.yml
+    with:
+      github_environment: production
+      deploy_environment: production
+    secrets: inherit
+
+  release:
+    name: tag and release
+    needs: [version, deploy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh release create "v$VERSION" --repo "$REPOSITORY" --target "$GITHUB_SHA" \
+            --title "v$VERSION" --generate-notes --latest
+          echo "Released v$VERSION" >> "$GITHUB_STEP_SUMMARY"

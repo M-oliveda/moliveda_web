@@ -1,0 +1,12 @@
+[
+  {
+    "name": "delete-after-7d-v1",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "any", "olderThan": "7d" }
+  },
+  {
+    "name": "keep-newest-2-v1",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": { "keepCount": 2 }
+  }
+]

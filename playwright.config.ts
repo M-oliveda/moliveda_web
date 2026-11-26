@@ -1,5 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
+import {
+  E2E_ORIGIN_SECRET,
+  PRODUCTION_PORT,
+  PRODUCTION_URL,
+} from "./e2e/production-server";
+
 const PORT = 3100;
 const BASE_URL = `http://127.0.0.1:${String(PORT)}`;
 const IS_CI = Boolean(process.env.CI);
@@ -27,11 +33,28 @@ export default defineConfig({
     { name: "webkit", use: { ...devices["Desktop Safari"] } },
     { name: "mobile-safari", use: { ...devices["iPhone 15"] } },
   ],
-  webServer: {
-    command: "npm run start",
-    env: { HOSTNAME: "127.0.0.1", PORT: String(PORT) },
-    url: `${BASE_URL}/health`,
-    reuseExistingServer: !IS_CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: "npm run start",
+      env: { APP_ENV: "local", HOSTNAME: "127.0.0.1", PORT: String(PORT) },
+      url: `${BASE_URL}/health`,
+      reuseExistingServer: !IS_CI,
+      timeout: 120_000,
+    },
+    // Same build with APP_ENV=production, for e2e/origin-guard.spec.ts. It
+    // serves the standalone output directly: the spec needs no static assets,
+    // and the copy step stays with the server above.
+    {
+      command: "node .next/standalone/server.js",
+      env: {
+        APP_ENV: "production",
+        ORIGIN_VERIFY_SECRET: E2E_ORIGIN_SECRET,
+        HOSTNAME: "127.0.0.1",
+        PORT: String(PRODUCTION_PORT),
+      },
+      url: `${PRODUCTION_URL}/health`,
+      reuseExistingServer: !IS_CI,
+      timeout: 120_000,
+    },
+  ],
 });

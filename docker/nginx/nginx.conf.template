@@ -85,6 +85,11 @@ server {
         limit_req zone=global burst=100 nodelay;
         limit_req_status 429;
 
+        # auth_basic logs the submitted user name at `error` level on every failed login (and an
+        # unknown "user name" may be a mistyped password). Keep only crit and above here; the
+        # access log still records 401, 429 and 5xx statuses.
+        error_log /dev/stderr crit;
+
         # Written by the entrypoint: basic auth with the htpasswd file, or `auth_basic off;` when
         # the gate starts without credentials (only allowed when APP_ENV=local).
         include /etc/nginx/auth/gate-auth.conf;

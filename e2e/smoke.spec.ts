@@ -34,6 +34,14 @@ test("/health answers ok and is never cached", async ({ request }) => {
   expect(await response.json()).toStrictEqual({ status: "ok" });
 });
 
+test("/ready answers ready and is never cached", async ({ request }) => {
+  const response = await request.get("/ready");
+
+  expect(response.status()).toBe(200);
+  expect(response.headers()["cache-control"]).toBe("no-store");
+  expect(await response.json()).toStrictEqual({ status: "ready" });
+});
+
 test("responses do not advertise the framework", async ({ request }) => {
   const response = await request.get("/");
 

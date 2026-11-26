@@ -1,0 +1,66 @@
+# Reusable: gated preview per pull request into develop (MASTERPLAN 10.2). Called by ci.yml
+# after `CI passed`. Only pull requests from this repository deploy: workflows run on
+# `pull_request`, never `pull_request_target`, so fork pull requests never receive secrets.
+# Dependabot pull requests are skipped because Dependabot runs receive no Actions secrets.
+# cleanup-preview.yml deletes the service and its image tags when the pull request closes.
+name: Deploy preview
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/build-push-deploy.yml
+    with:
+      github_environment: preview
+      deploy_environment: preview
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets: inherit
+
+  comment:
+    name: preview comment
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      # One comment per pull request, found by its hidden marker and updated on every push.
+      - name: Post or update the preview URL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          URL: ${{ needs.deploy.outputs.url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Actions drops a job output that contains a secret value, which leaves URL empty.
+          if [ -z "$URL" ]; then
+            echo "::error::The deploy job returned no URL (an output containing a secret value is dropped). Check that no secret value appears in the service name."
+            exit 1
+          fi
+          marker="<!-- moliveda-web-preview -->"
+          body="$(printf '%s\n%s\n\n%s\n' "$marker" \
+            "**Preview:** $URL" \
+            "Commit \`${HEAD_SHA:0:12}\`. Behind the gate: the credentials are in the \`preview\` GitHub Environment. Deleted when this pull request closes.")"
+          comment_id="$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" \
+            | head -n 1)"
+          if [ -n "$comment_id" ]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$body" > /dev/null
+            echo "Updated comment $comment_id"
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" > /dev/null
+            echo "Posted the preview comment"
+          fi

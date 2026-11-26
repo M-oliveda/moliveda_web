@@ -1,6 +1,7 @@
 # Quality gates for every push and pull request (MASTERPLAN 10.2). `CI passed` is the only
-# required status check. The deploy calls (deploy-preview, deploy-env, deploy-prod) are added
-# in Phase 2, after `CI passed`.
+# required status check. The deploys are reusable workflows called after it, so nothing deploys
+# unless every gate passed: previews for pull requests into develop, development and staging on
+# pushes to develop and release/**, production on pushes to main.
 name: CI
 
 on:
@@ -29,6 +30,7 @@ env:
   # Pinned by tag and digest, like the Dockerfile base images.
   GITLEAKS_IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
   TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+  ACTIONLINT_IMAGE: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
 jobs:
   quality:
@@ -75,6 +77,11 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)"
           -v "$GITHUB_WORKSPACE:/repo" -w /repo "$GITLEAKS_IMAGE"
           git --redact --no-banner --verbose .
+      # Workflow syntax, expressions and the embedded shell scripts (shellcheck).
+      - name: actionlint
+        run: >
+          docker run --rm --user "$(id -u):$(id -g)"
+          -v "$GITHUB_WORKSPACE:/repo" -w /repo "$ACTIONLINT_IMAGE" -color
       - name: REUSE compliance
         uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0
       - name: Dependency review
@@ -145,7 +152,7 @@ jobs:
       - run: docker build --target gate -t moliveda-web-gate:ci .
       - name: Boot the runner as non-root and poll /health
         run: |
-          docker run -d --name runner -p 8080:8080 moliveda-web:ci
+          docker run -d --name runner -p 8080:8080 -e APP_ENV=local moliveda-web:ci
           uid="$(docker exec runner id -u)"
           if [ "$uid" = "0" ]; then
             echo "::error::the runner image runs as root"
@@ -161,6 +168,39 @@ jobs:
           docker logs runner
           echo "::error::/health did not answer within 30 s"
           exit 1
+      - name: The runner fails closed and guards the origin in production
+        run: |
+          # No APP_ENV, then production without the origin secret: both must refuse to start.
+          for args in "" "-e APP_ENV=production"; do
+            # shellcheck disable=SC2086 # word splitting of $args is intended
+            if timeout 60 docker run --rm $args moliveda-web:ci; then
+              echo "::error::the runner started with an invalid configuration ($args)"
+              exit 1
+            fi
+          done
+          # A throwaway value generated for this job only.
+          secret="$(openssl rand -hex 32)"
+          docker run -d --name runner-prod -p 8081:8080 \
+            -e APP_ENV=production -e ORIGIN_VERIFY_SECRET="$secret" moliveda-web:ci
+          for _ in $(seq 1 30); do
+            curl --silent --fail http://127.0.0.1:8081/ready > /dev/null && break
+            sleep 1
+          done
+          check() {
+            local expected="$1"
+            shift
+            local status
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' "$@")"
+            if [ "$status" != "$expected" ]; then
+              docker logs runner-prod
+              echo "::error::expected $expected, got $status"
+              exit 1
+            fi
+          }
+          check 200 http://127.0.0.1:8081/health
+          check 200 http://127.0.0.1:8081/ready
+          check 403 http://127.0.0.1:8081/
+          check 200 -H "X-Origin-Verify: $secret" http://127.0.0.1:8081/
       - name: Gate behavior
         run: scripts/test-gate.sh
       - name: Trivy (fixable critical findings fail)
@@ -192,3 +232,43 @@ jobs:
               exit 1
             fi
           done
+
+  # Deploys (MASTERPLAN 10.2). Each one runs only after `CI passed` succeeded.
+  deploy-preview:
+    name: deploy-preview
+    needs: ci-passed
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.base_ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      pull-requests: write
+    uses: ./.github/workflows/deploy-preview.yml
+    secrets: inherit
+
+  deploy-env:
+    name: deploy-env
+    needs: ci-passed
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/release/'))
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/deploy-env.yml
+    secrets: inherit
+
+  deploy-prod:
+    name: deploy-prod
+    needs: ci-passed
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/deploy-prod.yml
+    secrets: inherit

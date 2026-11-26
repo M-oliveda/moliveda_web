@@ -197,7 +197,10 @@ if grep -q '/health' "${WORK}/access.log"; then
 else
     pass "probes are not logged"
 fi
-if docker logs "$GATE" 2>&1 | grep -qF -e "$PASSWORD" -e "w0rd" -e "$USERNAME"; then
+# Read the logs into a file first: piping into `grep -q` lets `docker logs` die of SIGPIPE, and
+# with pipefail a match would then count as a pass.
+docker logs "$GATE" > "${WORK}/gate.log" 2>&1
+if grep -qF -e "$PASSWORD" -e "w0rd" -e "$USERNAME" "${WORK}/gate.log"; then
     fail "logs never contain the credentials"
 else
     pass "logs never contain the credentials"
