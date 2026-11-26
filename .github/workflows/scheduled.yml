@@ -107,12 +107,11 @@ jobs:
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       # Closed pull requests, or previews older than 14 days.
-      - name: Delete stale preview services and their tags
+      # Their images are deleted by the preview repository's cleanup policy (10.4).
+      - name: Delete stale preview services
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
-          DOCKERHUB_CLEANUP_TOKEN: ${{ secrets.DOCKERHUB_CLEANUP_TOKEN }}
         run: |
           gcloud run services list --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
             --format=json > "$RUNNER_TEMP/services.json"
@@ -124,31 +123,12 @@ jobs:
           fi
           while read -r service; do
             gcloud run services delete "$service" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --quiet
-            node scripts/deploy/dockerhub-tags.ts preview "${service#moliveda-web-pr-}"
             echo "Deleted $service"
           done < "$RUNNER_TEMP/stale.txt"
 
-  prune-tags:
-    name: prune Docker Hub tags
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-      # Keeps v* tags and the 10 newest per environment; deletes the rest after 30 days.
-      - name: Prune
-        env:
-          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
-          DOCKERHUB_CLEANUP_TOKEN: ${{ secrets.DOCKERHUB_CLEANUP_TOKEN }}
-        run: node scripts/deploy/dockerhub-tags.ts prune
-
   report:
     name: report failures
-    needs: [e2e-matrix, audit, links, stale-previews, prune-tags]
+    needs: [e2e-matrix, audit, links, stale-previews]
     if: failure()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

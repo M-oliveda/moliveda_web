@@ -24,9 +24,6 @@ on:
       url:
         description: The service URL
         value: ${{ jobs.deploy.outputs.url }}
-      app_image:
-        description: The deployed app image, pinned by digest
-        value: ${{ jobs.deploy.outputs.app_image }}
 
 permissions:
   contents: read
@@ -52,7 +49,6 @@ jobs:
       cancel-in-progress: false
     outputs:
       url: ${{ steps.plan.outputs.url }}
-      app_image: ${{ steps.images.outputs.app }}
     env:
       HUSKY: "0"
       DEPLOY_ENVIRONMENT: ${{ inputs.deploy_environment }}
@@ -60,7 +56,6 @@ jobs:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
       GCP_REGION: ${{ vars.GCP_REGION }}
-      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,11 +69,18 @@ jobs:
         id: plan
         run: node scripts/deploy/deploy-plan.ts
 
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+      # Images go to the Artifact Registry repository of the environment's own project (10.4),
+      # so Cloud Run pulls them in-region without the Docker Hub cache. Workload Identity
+      # Federation authenticates the push too; gcloud's credential helper hands Docker a
+      # short-lived token, so no registry password exists anywhere.
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Docker credentials for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # NEXT_PUBLIC_* values are inlined at build time, so each environment gets its own image
       # (4.7). Server secrets are never build arguments.
@@ -90,7 +92,7 @@ jobs:
           target: runner
           platforms: linux/amd64
           push: true
-          tags: docker.io/${{ vars.DOCKERHUB_USERNAME }}/moliveda-web:${{ steps.plan.outputs.app_tag }}
+          tags: ${{ steps.plan.outputs.app_image }}
           build-args: |
             APP_ENV=${{ inputs.deploy_environment }}
             NEXT_PUBLIC_SITE_URL=${{ inputs.deploy_environment == 'production' && vars.NEXT_PUBLIC_SITE_URL || steps.plan.outputs.url }}
@@ -100,13 +102,15 @@ jobs:
           cache-to: type=gha,mode=max,scope=app-${{ inputs.deploy_environment }}
           provenance: mode=max
           sbom: true
+      # The attestation stays in GitHub's attestation store (`gh attestation verify`), not in the
+      # registry, so the cleanup policies have nothing extra to keep track of.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: index.docker.io/${{ vars.DOCKERHUB_USERNAME }}/moliveda-web
+          subject-name: ${{ steps.plan.outputs.registry }}/app
           subject-digest: ${{ steps.app.outputs.digest }}
-          push-to-registry: true
+          push-to-registry: false
 
-      # The gate has no environment-specific input, so it is tagged by commit only (10.4).
+      # The gate has no environment-specific input, so it is tagged by build only (10.4).
       - name: Build and push the gate image
         id: gate
         if: steps.plan.outputs.gated == 'true'
@@ -116,7 +120,7 @@ jobs:
           target: gate
           platforms: linux/amd64
           push: true
-          tags: docker.io/${{ vars.DOCKERHUB_USERNAME }}/moliveda-web-gate:${{ steps.plan.outputs.gate_tag }}
+          tags: ${{ steps.plan.outputs.gate_image }}
           cache-from: type=gha,scope=gate
           cache-to: type=gha,mode=max,scope=gate
           provenance: mode=max
@@ -124,36 +128,9 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: steps.plan.outputs.gated == 'true'
         with:
-          subject-name: index.docker.io/${{ vars.DOCKERHUB_USERNAME }}/moliveda-web-gate
+          subject-name: ${{ steps.plan.outputs.registry }}/gate
           subject-digest: ${{ steps.gate.outputs.digest }}
-          push-to-registry: true
-
-      # The manifest names each image by its run-unique tag: Cloud Run reports a just-pushed
-      # Docker Hub digest as not found, but resolves a new tag to its digest when it creates the
-      # revision. "Verify image digests" then checks that digest (10.4). `app` and `gate` stay
-      # pinned by digest for the release tag and the summary.
-      - name: Image references
-        id: images
-        env:
-          APP_DIGEST: ${{ steps.app.outputs.digest }}
-          GATE_DIGEST: ${{ steps.gate.outputs.digest }}
-          APP_TAG: ${{ steps.plan.outputs.app_tag }}
-          GATE_TAG: ${{ steps.plan.outputs.gate_tag }}
-        run: |
-          {
-            echo "app=docker.io/${DOCKERHUB_USERNAME}/moliveda-web@${APP_DIGEST}"
-            echo "app_tagged=docker.io/${DOCKERHUB_USERNAME}/moliveda-web:${APP_TAG}"
-            if [ -n "$GATE_DIGEST" ]; then
-              echo "gate=docker.io/${DOCKERHUB_USERNAME}/moliveda-web-gate@${GATE_DIGEST}"
-              echo "gate_tagged=docker.io/${DOCKERHUB_USERNAME}/moliveda-web-gate:${GATE_TAG}"
-            fi
-          } >> "$GITHUB_OUTPUT"
-
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+          push-to-registry: false
 
       # Production keeps traffic on the revision serving it now until the candidate passes.
       - name: Current production revision
@@ -174,8 +151,8 @@ jobs:
       # (AGENTS.md). render-service.ts sends each one only to the container that needs it.
       - name: Render the service manifest
         env:
-          APP_IMAGE: ${{ steps.images.outputs.app_tagged }}
-          GATE_IMAGE: ${{ steps.images.outputs.gate_tagged }}
+          APP_IMAGE: ${{ steps.plan.outputs.app_image }}
+          GATE_IMAGE: ${{ steps.plan.outputs.gated == 'true' && steps.plan.outputs.gate_image || '' }}
           CURRENT_REVISION: ${{ steps.current.outputs.revision }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           EMAIL_DRIVER: ${{ vars.EMAIL_DRIVER }}
@@ -204,17 +181,16 @@ jobs:
       - name: Verify image digests
         env:
           REVISION: ${{ steps.plan.outputs.revision }}
+          REGISTRY: ${{ steps.plan.outputs.registry }}
           APP_DIGEST: ${{ steps.app.outputs.digest }}
           GATE_DIGEST: ${{ steps.gate.outputs.digest }}
         run: |
           gcloud run revisions describe "$REVISION" --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID" --format=json > "$RUNNER_TEMP/revision.json"
-          docker buildx imagetools inspect --raw \
-            "docker.io/${DOCKERHUB_USERNAME}/moliveda-web@${APP_DIGEST}" > "$RUNNER_TEMP/app-index.json"
+          docker buildx imagetools inspect --raw "${REGISTRY}/app@${APP_DIGEST}" > "$RUNNER_TEMP/app-index.json"
           args=("$RUNNER_TEMP/revision.json" "app=${APP_DIGEST}=$RUNNER_TEMP/app-index.json")
           if [ -n "$GATE_DIGEST" ]; then
-            docker buildx imagetools inspect --raw \
-              "docker.io/${DOCKERHUB_USERNAME}/moliveda-web-gate@${GATE_DIGEST}" > "$RUNNER_TEMP/gate-index.json"
+            docker buildx imagetools inspect --raw "${REGISTRY}/gate@${GATE_DIGEST}" > "$RUNNER_TEMP/gate-index.json"
             args+=("gate=${GATE_DIGEST}=$RUNNER_TEMP/gate-index.json")
           fi
           node scripts/deploy/verify-digests.ts "${args[@]}"
@@ -247,7 +223,7 @@ jobs:
         env:
           URL: ${{ steps.plan.outputs.url }}
           REVISION: ${{ steps.plan.outputs.revision }}
-          APP_IMAGE: ${{ steps.images.outputs.app }}
+          APP_IMAGE: ${{ steps.plan.outputs.registry }}/app@${{ steps.app.outputs.digest }}
         run: |
           echo "Deployed $REVISION to $URL"
           {
