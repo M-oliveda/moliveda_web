@@ -12,14 +12,14 @@ const AXE_TAGS = [
 ];
 
 test("the home page renders a single h1 inside main", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/en");
 
   await expect(page.getByRole("main")).toHaveCount(1);
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
 });
 
 test("the home page has no axe violations", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/en");
 
   const results = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
 
@@ -43,7 +43,9 @@ test("/ready answers ready and is never cached", async ({ request }) => {
 });
 
 test("responses do not advertise the framework", async ({ request }) => {
-  const response = await request.get("/");
+  for (const path of ["/", "/en"]) {
+    const response = await request.get(path, { maxRedirects: 0 });
 
-  expect(response.headers()["x-powered-by"]).toBeUndefined();
+    expect(response.headers()["x-powered-by"]).toBeUndefined();
+  }
 });
