@@ -130,11 +130,20 @@ export function shortSha(sha: string): string {
   return sha.slice(0, 12);
 }
 
-/** App image tag: `<environment>-<sha>`, or `pr-<n>-<sha>` for a preview (10.4). */
+/**
+ * `<sha>-<run id>-<run attempt>`. Every run attempt pushes a new digest, so every tag is new:
+ * Cloud Run resolves Docker Hub tags through a cache that may keep an old tag for up to an
+ * hour, and a reused tag could resolve to an earlier build (10.4).
+ */
+export function buildId(input: IDeployInput): string {
+  return `${shortSha(input.sha)}-${input.runId}-${input.runAttempt}`;
+}
+
+/** App image tag: `<environment>-<build id>`, or `pr-<n>-<build id>` for a preview (10.4). */
 export function appImageTag(input: IDeployInput): string {
   return input.environment === "preview"
-    ? `pr-${String(input.prNumber)}-${shortSha(input.sha)}`
-    : `${input.environment}-${shortSha(input.sha)}`;
+    ? `pr-${String(input.prNumber)}-${buildId(input)}`
+    : `${input.environment}-${buildId(input)}`;
 }
 
 /** The `run.app` URL is deterministic, so it is known before the first deploy (10.2 step 2). */
@@ -168,7 +177,7 @@ export function createDeployPlan(input: IDeployInput): IDeployPlan {
     service,
     revision: revisionName(input, service),
     appTag: appImageTag(input),
-    gateTag: shortSha(input.sha),
+    gateTag: buildId(input),
     url: serviceUrl(service, input.projectNumber, input.region),
     candidateUrl:
       input.environment === "production"

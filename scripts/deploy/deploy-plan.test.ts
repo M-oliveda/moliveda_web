@@ -80,8 +80,8 @@ describe("createDeployPlan", () => {
       maxInstances: 2,
       service: "moliveda-web",
       revision: "moliveda-web-0123456789ab-16000000001-1",
-      appTag: "development-0123456789ab",
-      gateTag: "0123456789ab",
+      appTag: "development-0123456789ab-16000000001-1",
+      gateTag: "0123456789ab-16000000001-1",
       url: "https://moliveda-web-123456789012.us-central1.run.app",
       candidateUrl: undefined,
     });
@@ -95,7 +95,7 @@ describe("createDeployPlan", () => {
     );
 
     expect(plan.service).toBe("moliveda-web-pr-7");
-    expect(plan.appTag).toBe("pr-7-0123456789ab");
+    expect(plan.appTag).toBe("pr-7-0123456789ab-16000000001-1");
     expect(plan.maxInstances).toBe(1);
     expect(plan.url).toBe(
       "https://moliveda-web-pr-7-123456789012.us-central1.run.app"
@@ -111,10 +111,24 @@ describe("createDeployPlan", () => {
       gated: false,
       minInstances: 1,
       maxInstances: 3,
-      appTag: "production-0123456789ab",
+      appTag: "production-0123456789ab-16000000001-1",
       candidateUrl:
         "https://candidate---moliveda-web-123456789012.us-central1.run.app",
     });
+  });
+});
+
+describe("image tags", () => {
+  it("are new for every run attempt, so a cached tag is never reused", () => {
+    const first = createDeployPlan(parseDeployInput(source()));
+    const rerun = createDeployPlan(
+      parseDeployInput(source({ GITHUB_RUN_ATTEMPT: "2" }))
+    );
+
+    expect(rerun.appTag).toBe("development-0123456789ab-16000000001-2");
+    expect(rerun.gateTag).toBe("0123456789ab-16000000001-2");
+    expect(rerun.appTag).not.toBe(first.appTag);
+    expect(rerun.gateTag).not.toBe(first.gateTag);
   });
 });
 
@@ -145,8 +159,8 @@ describe("formatOutputs", () => {
       "gated=true",
       "service=moliveda-web",
       "revision=moliveda-web-0123456789ab-16000000001-1",
-      "app_tag=development-0123456789ab",
-      "gate_tag=0123456789ab",
+      "app_tag=development-0123456789ab-16000000001-1",
+      "gate_tag=0123456789ab-16000000001-1",
       "url=https://moliveda-web-123456789012.us-central1.run.app",
       "candidate_url=",
       "",
