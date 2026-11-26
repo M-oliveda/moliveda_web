@@ -1,0 +1,3 @@
+# Reviewed false positives, one fingerprint per line (commit:file:rule:line).
+# Dummy basic-auth header ("foo:bar") in the gate test, before it moved into an allow-listed variable.
+ac4b9fb62004b2d19f84100e9a3953c38513ae87:scripts/test-gate.sh:curl-auth-header:110

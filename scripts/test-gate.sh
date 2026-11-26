@@ -106,8 +106,10 @@ for _ in $(seq 1 30); do
 done
 expect_eq "open gate: GET / without credentials" "$(status "${OPEN_URL}/")" 200
 expect_eq "open gate: GET /health without credentials" "$(status "${OPEN_URL}/health")" 200
+# Dummy credentials (base64 of "foo:bar"), not a secret.
+FAKE_AUTH_HEADER='Authorization: Basic Zm9vOmJhcg==' # gitleaks:allow
 expect_eq "open gate: the Authorization header never reaches the app" \
-    "$(curl --silent --header 'Authorization: Basic Zm9vOmJhcg==' "${OPEN_URL}/")" \
+    "$(curl --silent --header "$FAKE_AUTH_HEADER" "${OPEN_URL}/")" \
     "upstream ok auth=[]"
 if curl --silent --head "${OPEN_URL}/" | tr -d '\r' | grep -qi '^x-robots-tag: noindex, nofollow$'; then
     pass "open gate: responses carry X-Robots-Tag"
