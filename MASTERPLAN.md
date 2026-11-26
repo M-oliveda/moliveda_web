@@ -351,6 +351,7 @@ The complete variable list is in `README.md`.
 - Security headers are built by a pure, tested function in `src/lib/security-headers.ts` and sent from `next.config.ts` (`poweredByHeader: false`): `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy: same-origin`, `X-Frame-Options: DENY`.
 - CSP: `default-src 'self'`; `script-src 'self'` + `https://challenges.cloudflare.com` + `https://static.cloudflareinsights.com`; `frame-src 'self' https://challenges.cloudflare.com`; `connect-src 'self' https://cloudflareinsights.com`; `object-src 'self'` (PDF); `base-uri 'self'`; `form-action 'self'`; `frame-ancestors 'none'`. `'unsafe-eval'` only under `next dev`. It ships as `Content-Security-Policy-Report-Only` in development and staging first, reporting to `POST /api/v1/csp-report` (rate limited, size limited, logged at `warn`), and is enforced in production once the reports are clean. Nonce-based CSP is evaluated in Phase 6; nonces force dynamic rendering, so any remaining `'unsafe-inline'` is documented as a known gap.
 - Cloudflare features that inject or rewrite scripts (Rocket Loader, Email Obfuscation, automatic Web Analytics injection) stay off, because the CSP would block them.
+- `next-themes` (Phase 3) injects one inline script that sets the theme class before the first paint. The Phase 6 CSP must allow it with a hash or nonce, or list `'unsafe-inline'` as a known gap.
 - **Client IP for rate limiting:** in production, `CF-Connecting-IP`, trusted only on requests that passed the origin guard. Behind the gate, `X-Real-IP` set by NGINX from the rightmost `X-Forwarded-For` entry. Earlier `X-Forwarded-For` entries are never trusted. Tested with crafted headers.
 - **Origin guard:** in production, every request except `/health` and `/ready` must carry `X-Origin-Verify` matching `ORIGIN_VERIFY_SECRET` (or `ORIGIN_VERIFY_SECRET_PREVIOUS` during a rotation), otherwise `403` with no body. The comparison is constant-time and the header is redacted from logs. Outside production the guard is off, so the gate and local runs are unaffected.
 - `.dev` domains are HSTS-preloaded, so HTTPS is mandatory everywhere on `moliveda.dev`.
@@ -373,7 +374,7 @@ The complete variable list is in `README.md`.
 | Logs    | Pino JSON to stdout. Fields: `severity`, `message`, `service: "moliveda-web"`, `env`, `correlationId`, Cloud Trace field `logging.googleapis.com/trace`. `redact` covers authorization, cookies, `x-origin-verify`, email, message, tokens and keys. Lengths and ids are logged instead of values. The gate logs JSON in the `httpRequest` shape. |
 | Errors  | Errors are logged with their stack in the format Cloud Error Reporting recognizes, so they are grouped and alerted without another vendor.                                                                                                                                                                                                        |
 | Metrics | Cloud Run built-in request count, latency and instance metrics in Cloud Monitoring. A log-based metric counts contact submissions by outcome. Cloudflare analytics shows edge traffic and cache hit ratio.                                                                                                                                        |
-| Traces  | `X-Cloud-Trace-Context` correlation from Phase 3. OpenTelemetry exporter to Cloud Trace in Phase 6.                                                                                                                                                                                                                                               |
+| Traces  | `X-Cloud-Trace-Context` correlation from Phase 3; the trace field needs the project id, which `scripts/deploy/render-service.ts` passes to the app as `GCP_PROJECT_ID` (not secret). OpenTelemetry exporter to Cloud Trace in Phase 6.                                                                                                            |
 | SLOs    | Availability 99.5% per 28 days on `/ready` and the locale pages; p95 latency under 500 ms for static pages; contact success at least 99% excluding `4xx`. Cloud Monitoring SLOs with burn-rate alerts.                                                                                                                                            |
 | Alerts  | Uptime check on `https://moliveda.dev/en` and `/ready`, SLO burn rate, contact failure rate, certificate expiry. Notifications to the owner's email. Alert policies and the dashboard are JSON files in `infra/gcp/monitoring/`.                                                                                                                  |
 
@@ -660,7 +661,7 @@ Every workflow sets `permissions: contents: read` at the top and widens it per j
 3. Build and push the images to the project's Artifact Registry repository with Buildx (GitHub Actions cache, `--provenance=mode=max --sbom=true`), attest them with `actions/attest-build-provenance` (kept in GitHub's attestation store, not pushed to the registry), and read back their digests.
 4. Render the service manifest with `scripts/deploy/render-service.ts` (D36): the container environment and secrets are written into a `0600` file, so values never appear on a command line. Every environment, including production, receives its secrets this way. `--set-secrets` and Secret Manager are not used.
 5. Deploy with `gcloud run services replace`, naming each image by its run-unique tag (10.4), then check with `scripts/deploy/verify-digests.ts` that every container of the new revision runs the digest pushed in step 3. Each run attempt creates a named revision (`<service>-<sha>-<run id>-<attempt>`). Non-production routes all traffic to it. Production pins 100% of traffic on the revision serving now and tags the new one `candidate`, smoke-tests the candidate through its tag URL with the `X-Origin-Verify` header, then runs `gcloud run services update-traffic --to-latest`. If the smoke test fails, traffic never moved.
-6. Smoke test (`scripts/deploy/smoke.ts`): `/health` and `/ready` return 200; gated environments return 401 on `/` without credentials, 200 with them, and carry `X-Robots-Tag`; the production candidate returns 403 on `/` without the origin header and 200 with it. Phase 3 changes that 200 to the `307` locale redirect, and Phase 7 adds `200` on every locale page through `https://moliveda.dev`.
+6. Smoke test (`scripts/deploy/smoke.ts`): `/health` and `/ready` return 200; gated environments return 401 on `/` without credentials, 200 with them, and carry `X-Robots-Tag`; the production candidate returns 403 on `/` without the origin header and 200 with it. Phase 3 changes that 200 to the `307` locale redirect (to `/en`, asked for with `Accept-Language: en`) and adds `200` on `/en`, in both modes. Phase 7 adds `200` on every locale page through `https://moliveda.dev`.
 7. **Print the service URL** in the job log and in the job summary.
 
 **`deploy-preview.yml`**: runs only when `github.event.pull_request.head.repo.full_name == github.repository`, and skips Dependabot pull requests (Dependabot runs receive no Actions secrets). Uses `pull_request`, **never** `pull_request_target`, and fork PRs receive no secrets. Deploys `moliveda-web-pr-<n>` to the preview project behind the gate and keeps **one** PR comment with the URL, found by a hidden marker and updated on every push.
@@ -833,10 +834,10 @@ Done when: `npm run verify` and `docker compose up --build` pass on a blank app,
 
 ### Phase 2: CI/CD and GCP environments
 
-- [ ] `infra/gcp` scripts and `check.sh`; WIF binding; runtime service account; production secrets in the `production` GitHub Environment.
-- [ ] `build-push-deploy.yml`, `deploy-preview.yml`, `deploy-env.yml`, `deploy-prod.yml`, `cleanup-preview.yml`, `scheduled.yml`.
-- [ ] Gate credentials per environment; confirm the gate's client-IP key on the first gated deploy (section 13); origin guard and its secret.
-- [ ] Runbooks in `docs/runbooks/`.
+- [x] `infra/gcp` scripts and `check.sh`; WIF binding; runtime service account; production secrets in the `production` GitHub Environment.
+- [x] `build-push-deploy.yml`, `deploy-preview.yml`, `deploy-env.yml`, `deploy-prod.yml`, `cleanup-preview.yml`, `scheduled.yml`.
+- [x] Gate credentials per environment; confirm the gate's client-IP key on the first gated deploy (section 13); origin guard and its secret.
+- [x] Runbooks in `docs/runbooks/`.
 
 Done when: a push to `develop` deploys to development behind the gate and prints the URL, and a PR gets a gated preview that is deleted on close.
 
@@ -849,6 +850,14 @@ Status: the code for every task above is built and checked locally (`npm run ver
 - [ ] Theme provider, `MotionConfig` with `LazyMotion`.
 
 Done when: `/` redirects correctly for each `Accept-Language`, the probes are tested, and a missing key fails the build.
+
+Status: built on `feature/complete-phase-3` and checked locally (`npm run verify` and the Playwright Chromium projects in the containers). The boxes are ticked once it is merged. Decisions taken with the owner:
+
+- `GCP_PROJECT_ID` is passed to the app for the Cloud Logging trace field (4.10).
+- The `NEXT_LOCALE` cookie lasts one year (`SameSite=Lax`, `Secure` outside local runs).
+- Paths outside a locale use `global-not-found.tsx` (`experimental.globalNotFound`).
+- next-intl's `Link` alternates header is off, because `hreflang` comes from the metadata in Phase 6 with the `pt-BR` tag.
+- The route JavaScript budget moved from `/` to each locale page: 155.0 kB measured, 160 kB budget.
 
 ### Phase 4: Design system and pages
 
