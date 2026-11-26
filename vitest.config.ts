@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import react from "@vitejs/plugin-react";
 import { configDefaults, defineConfig } from "vitest/config";
 
@@ -5,6 +7,13 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     tsconfigPaths: true,
+    // `server-only` throws outside the `react-server` condition; Vitest runs
+    // server modules directly, so it resolves to the package's empty build.
+    alias: {
+      "server-only": fileURLToPath(
+        new URL("node_modules/server-only/empty.js", import.meta.url)
+      ),
+    },
   },
   test: {
     environment: "jsdom",

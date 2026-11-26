@@ -145,7 +145,7 @@ jobs:
       - run: docker build --target gate -t moliveda-web-gate:ci .
       - name: Boot the runner as non-root and poll /health
         run: |
-          docker run -d --name runner -p 8080:8080 moliveda-web:ci
+          docker run -d --name runner -p 8080:8080 -e APP_ENV=local moliveda-web:ci
           uid="$(docker exec runner id -u)"
           if [ "$uid" = "0" ]; then
             echo "::error::the runner image runs as root"

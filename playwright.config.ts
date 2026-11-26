@@ -29,7 +29,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "npm run start",
-    env: { HOSTNAME: "127.0.0.1", PORT: String(PORT) },
+    env: { APP_ENV: "local", HOSTNAME: "127.0.0.1", PORT: String(PORT) },
     url: `${BASE_URL}/health`,
     reuseExistingServer: !IS_CI,
     timeout: 120_000,

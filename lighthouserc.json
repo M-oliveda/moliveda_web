@@ -1,7 +1,7 @@
 {
   "ci": {
     "collect": {
-      "startServerCommand": "HOSTNAME=127.0.0.1 PORT=3200 npm run start",
+      "startServerCommand": "APP_ENV=local HOSTNAME=127.0.0.1 PORT=3200 npm run start",
       "startServerReadyPattern": "Ready",
       "url": ["http://127.0.0.1:3200/"],
       "numberOfRuns": 3
