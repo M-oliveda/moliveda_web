@@ -1,0 +1,174 @@
+# Weekly checks and housekeeping on main (MASTERPLAN 7 and 10.2). A failure opens an issue,
+# or comments on the open one. Not yet here: Lighthouse against https://moliveda.dev (Phase 7,
+# once the domain is live) and mutation tests (Phase 8).
+name: Scheduled
+
+on:
+  schedule:
+    # Mondays at 06:17 UTC.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled
+  cancel-in-progress: false
+
+env:
+  HUSKY: "0"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  e2e-matrix:
+    name: e2e (all browsers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Every Playwright project: Chromium, Firefox, WebKit, mobile Chrome and mobile Safari.
+      - run: docker compose --profile e2e run --rm e2e
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: playwright-report-all-browsers
+          path: playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  audit:
+    name: full npm audit (report only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      # Development dependencies included. Blocking runtime findings are caught by ci.yml.
+      - name: npm audit
+        run: |
+          {
+            echo "### npm audit (all dependencies)"
+            echo '```'
+            npm audit || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  links:
+    name: link check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # moliveda.dev is excluded until it is live (Phase 7).
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --no-progress
+            --exclude '^https?://(www\.)?moliveda\.dev'
+            --exclude '^https?://(localhost|127\.0\.0\.1)'
+            --exclude-path node_modules
+            './**/*.md'
+          fail: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  stale-previews:
+    name: delete stale previews
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # The `preview` environment must allow `main` (docs/runbooks/first-deploy.md).
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      # Closed pull requests, or previews older than 14 days.
+      - name: Delete stale preview services and their tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_CLEANUP_TOKEN: ${{ secrets.DOCKERHUB_CLEANUP_TOKEN }}
+        run: |
+          gcloud run services list --region "$GCP_REGION" --project "$GCP_PROJECT_ID" \
+            --format=json > "$RUNNER_TEMP/services.json"
+          gh pr list --repo "$REPOSITORY" --state open --limit 500 --json number > "$RUNNER_TEMP/open-prs.json"
+          node scripts/deploy/stale-previews.ts "$RUNNER_TEMP/services.json" "$RUNNER_TEMP/open-prs.json" \
+            > "$RUNNER_TEMP/stale.txt"
+          if [ ! -s "$RUNNER_TEMP/stale.txt" ]; then
+            echo "No stale previews"
+          fi
+          while read -r service; do
+            gcloud run services delete "$service" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --quiet
+            node scripts/deploy/dockerhub-tags.ts preview "${service#moliveda-web-pr-}"
+            echo "Deleted $service"
+          done < "$RUNNER_TEMP/stale.txt"
+
+  prune-tags:
+    name: prune Docker Hub tags
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      # Keeps v* tags and the 10 newest per environment; deletes the rest after 30 days.
+      - name: Prune
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_CLEANUP_TOKEN: ${{ secrets.DOCKERHUB_CLEANUP_TOKEN }}
+        run: node scripts/deploy/dockerhub-tags.ts prune
+
+  report:
+    name: report failures
+    needs: [e2e-matrix, audit, links, stale-previews, prune-tags]
+    if: failure()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          title="Scheduled checks failed"
+          failed="$(printf '%s' "$RESULTS" | jq -r 'to_entries[] | select(.value.result == "failure") | "- `\(.key)`"')"
+          body="$(printf 'The weekly run failed: %s\n\n%s\n' "$RUN_URL" "$failed")"
+          number="$(gh issue list --repo "$REPOSITORY" --state open --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$REPOSITORY" --title "$title" --body "$body"
+          fi
