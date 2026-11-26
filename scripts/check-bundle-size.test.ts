@@ -44,6 +44,8 @@ describe("isSiteRoute", () => {
     ["/en/skills", true],
     ["/_not-found", false],
     ["/_global-error", false],
+    ["/[locale]", false],
+    ["/[locale]/experience", false],
   ])("%s is a site route: %s", (route, expected) => {
     expect(isSiteRoute(route)).toBe(expected);
   });
