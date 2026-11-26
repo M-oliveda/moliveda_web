@@ -1,0 +1,78 @@
+# Local development only (MASTERPLAN section 8). Development, Staging and production never use Compose.
+#
+#   docker compose up --build                          # http://localhost:3000
+#   docker compose exec web npm run verify             # every gate, inside the container
+#   docker compose --profile gate up --build           # gate in front of web, http://localhost:8080
+#   docker compose --profile e2e run --rm e2e          # Playwright against the production build
+#   docker compose --profile e2e run --rm e2e --project=chromium   # extra Playwright arguments
+name: moliveda_web
+
+services:
+  web:
+    container_name: moliveda_web_web-service
+    build:
+      context: .
+      target: dev
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: local
+    volumes:
+      - .:/app
+      # Linux (musl) dependencies and build output stay in volumes, so the host's macOS
+      # node_modules and .next never reach the container. After a lockfile change, run
+      # `docker compose build web && docker compose run --rm web npm ci --ignore-scripts`.
+      - web_node_modules:/app/node_modules
+      - web_next:/app/.next
+    # Modest ceiling so memory leaks show up on a laptop.
+    mem_limit: 2g
+
+  gate:
+    profiles: [gate]
+    build:
+      context: .
+      target: gate
+    depends_on:
+      - web
+    ports:
+      - "${GATE_PORT:-8080}:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Local only: with both BASIC_AUTH_* values unset the gate starts open (section 8.1).
+      APP_ENV: local
+      UPSTREAM: web:3000
+
+  e2e:
+    profiles: [e2e]
+    # Playwright's browsers do not run on Alpine; the official image ships Node.js 26 as well.
+    image: mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
+    working_dir: /app
+    init: true
+    ipc: host
+    environment:
+      CI: ${CI:-}
+      APP_ENV: local
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      - .:/app
+      # glibc dependencies, separate from the Alpine ones of `web`.
+      - e2e_node_modules:/app/node_modules
+      - e2e_next:/app/.next
+    # Extra arguments after the service name are passed to `playwright test`.
+    entrypoint:
+      - sh
+      - -c
+      - npm ci --ignore-scripts && npm run build && npm run test:e2e -- "$@"
+      - e2e
+    mem_limit: 4g
+
+volumes:
+  web_node_modules:
+  web_next:
+  e2e_node_modules:
+  e2e_next:
