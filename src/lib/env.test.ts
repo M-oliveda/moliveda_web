@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   EnvValidationError,
+  LOG_LEVELS,
   MIN_ORIGIN_SECRET_BYTES,
   parseEnv,
 } from "@/lib/env";
@@ -29,6 +30,8 @@ describe("parseEnv", () => {
       expect(parseEnv({ APP_ENV: appEnv })).toStrictEqual({
         APP_ENV: appEnv,
         ORIGIN_VERIFY_SECRETS: [],
+        LOG_LEVEL: "info",
+        GCP_PROJECT_ID: undefined,
       });
     }
   );
@@ -51,6 +54,8 @@ describe("parseEnv", () => {
     expect(env).toStrictEqual({
       APP_ENV: "production",
       ORIGIN_VERIFY_SECRETS: [CURRENT_SECRET],
+      LOG_LEVEL: "info",
+      GCP_PROJECT_ID: undefined,
     });
   });
 
@@ -113,6 +118,52 @@ describe("parseEnv", () => {
       "ORIGIN_VERIFY_SECRET_PREVIOUS",
     ]);
   });
+
+  it.each(LOG_LEVELS)("accepts LOG_LEVEL=%s", (level) => {
+    expect(parseEnv({ APP_ENV: "local", LOG_LEVEL: level }).LOG_LEVEL).toBe(
+      level
+    );
+  });
+
+  it("defaults an empty LOG_LEVEL to info", () => {
+    expect(parseEnv({ APP_ENV: "local", LOG_LEVEL: "" }).LOG_LEVEL).toBe(
+      "info"
+    );
+  });
+
+  it("rejects an unknown LOG_LEVEL", () => {
+    const error = captureError(() =>
+      parseEnv({ APP_ENV: "local", LOG_LEVEL: "verbose" })
+    );
+
+    expect(error.keys).toStrictEqual(["LOG_LEVEL"]);
+  });
+
+  it("accepts a valid GCP_PROJECT_ID", () => {
+    const env = parseEnv({
+      APP_ENV: "development",
+      GCP_PROJECT_ID: "moliveda-gcloudprojects-dev",
+    });
+
+    expect(env.GCP_PROJECT_ID).toBe("moliveda-gcloudprojects-dev");
+  });
+
+  it("treats an empty GCP_PROJECT_ID as unset", () => {
+    expect(
+      parseEnv({ APP_ENV: "local", GCP_PROJECT_ID: "" }).GCP_PROJECT_ID
+    ).toBeUndefined();
+  });
+
+  it.each(["Upper-Case", "short", "ends-with-hyphen-", "9starts-with-digit"])(
+    "rejects GCP_PROJECT_ID=%s",
+    (value) => {
+      const error = captureError(() =>
+        parseEnv({ APP_ENV: "local", GCP_PROJECT_ID: value })
+      );
+
+      expect(error.keys).toStrictEqual(["GCP_PROJECT_ID"]);
+    }
+  );
 
   it("names the failing keys without leaking values", () => {
     const short = "leaky-value";

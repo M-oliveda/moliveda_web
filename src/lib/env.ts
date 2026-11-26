@@ -3,8 +3,9 @@ import "server-only";
 import { z } from "@/lib/zod";
 
 /**
- * Validated configuration (MASTERPLAN 4.7). Phase 2 reads only the keys the
- * deploys need (environment and origin guard); later phases add theirs here.
+ * Validated configuration (MASTERPLAN 4.7). Phase 2 added the keys the deploys
+ * need (environment and origin guard), Phase 3 the logging keys; later phases
+ * add theirs here.
  */
 export const APP_ENVS = [
   "local",
@@ -16,6 +17,11 @@ export const APP_ENVS = [
 
 export type AppEnv = (typeof APP_ENVS)[number];
 
+/** Pino levels the service accepts (README, "Environment variables"). */
+export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
+
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
 /** Shortest accepted origin secret, in bytes (README, "Environment variables"). */
 export const MIN_ORIGIN_SECRET_BYTES = 32;
 
@@ -26,6 +32,12 @@ export interface IEnv {
    * the previous one while rotating. Always empty outside production.
    */
   readonly ORIGIN_VERIFY_SECRETS: readonly string[];
+  readonly LOG_LEVEL: LogLevel;
+  /**
+   * Google Cloud project that hosts the service. Builds the Cloud Logging trace
+   * field (`projects/<id>/traces/<trace>`); without it the field is omitted.
+   */
+  readonly GCP_PROJECT_ID: string | undefined;
 }
 
 /** Thrown when the environment is invalid. Lists key names only, never values. */
@@ -48,6 +60,10 @@ const ORIGIN_SECRET = z
   .string()
   .refine((value) => Buffer.byteLength(value) >= MIN_ORIGIN_SECRET_BYTES);
 
+// Google Cloud project id rules: 6 to 30 characters, lowercase letters, digits
+// and hyphens, starting with a letter and not ending with a hyphen.
+const GCP_PROJECT_ID = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/);
+
 const ENV_SCHEMA = z
   .object({
     // Required everywhere: a deployed service must never fall back to local.
@@ -57,6 +73,8 @@ const ENV_SCHEMA = z
       emptyAsUnset,
       ORIGIN_SECRET.optional()
     ),
+    LOG_LEVEL: z.preprocess(emptyAsUnset, z.enum(LOG_LEVELS).default("info")),
+    GCP_PROJECT_ID: z.preprocess(emptyAsUnset, GCP_PROJECT_ID.optional()),
   })
   .superRefine((env, context) => {
     if (
@@ -89,7 +107,12 @@ export function parseEnv(source: Readonly<Record<string, unknown>>): IEnv {
         )
       : [];
 
-  return { APP_ENV: env.APP_ENV, ORIGIN_VERIFY_SECRETS: secrets };
+  return {
+    APP_ENV: env.APP_ENV,
+    ORIGIN_VERIFY_SECRETS: secrets,
+    LOG_LEVEL: env.LOG_LEVEL,
+    GCP_PROJECT_ID: env.GCP_PROJECT_ID,
+  };
 }
 
 let cached: IEnv | undefined;
