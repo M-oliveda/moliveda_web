@@ -2,11 +2,11 @@
 
 Personal portfolio of **Mauricio Oliveda**, a full-stack software developer. The site helps future clients and companies understand his skills, experience and education. It is available in English (default), Spanish, Portuguese and French through path-based locales (`/en`, `/es`, `/pt`, `/fr`), picks the best language from the browser's `Accept-Language` header on the first visit, offers a resume viewer and download in each language, and includes a contact form that delivers email through Resend. It runs on Google Cloud Run behind Cloudflare at [moliveda.dev](https://moliveda.dev).
 
-> **Status:** planning. The architecture, decisions and roadmap are in [`MASTERPLAN.md`](./MASTERPLAN.md). Only the NGINX basic-auth gate is built so far. The commands below describe the scripts that will exist after Phase 1 of the plan.
+> **Status:** Phase 1 (scaffold and quality tooling) is built: a blank Next.js 16 app with every quality gate, the Docker images, the NGINX basic-auth gate and CI. The pages come in later phases. The architecture, decisions and roadmap are in [`MASTERPLAN.md`](./MASTERPLAN.md).
 
 ## Table of contents
 
-- [moliveda_web](#moliveda_web)
+- [moliveda\_web](#moliveda_web)
   - [Table of contents](#table-of-contents)
   - [Tools and technologies](#tools-and-technologies)
   - [Architecture](#architecture)
@@ -71,6 +71,7 @@ All text a visitor reads, UI strings and personal content, lives in `messages/{l
 ### Requirements
 
 - Node.js 26 LTS (see `.nvmrc`) and npm. Needed on the host for the Git hooks even when you work in Docker.
+- [gitleaks](https://github.com/gitleaks/gitleaks) on the host (`brew install gitleaks`). The `pre-commit` hook fails without it.
 - Docker and Docker Compose (the default way to run every check)
 - A Resend API key and Cloudflare Turnstile keys, or the test values listed in [Environment variables](#environment-variables)
 
@@ -89,21 +90,22 @@ In VS Code, install the recommended extensions (Prettier and markdownlint) when 
 
 ## Scripts
 
-| Command                 | What it does                                                           |
-| ----------------------- | ---------------------------------------------------------------------- |
-| `npm run dev`           | Start the development server                                           |
-| `npm run build`         | Create the production build                                            |
-| `npm run start`         | Serve the production build                                             |
-| `npm run verify`        | Run every gate below in order (what CI and the definition of done use) |
-| `npm run lint`          | Run ESLint on the whole project (zero warnings)                        |
-| `npm run format`        | Format all files with Prettier                                         |
-| `npm run format:check`  | Check formatting without writing                                       |
-| `npm run typecheck`     | Run `next typegen && tsc --noEmit`                                     |
-| `npm run check:design`  | Fail on arbitrary colors or `dark:` color prefixes (see `DESIGN.md`)   |
-| `npm run test`          | Run unit and integration tests once                                    |
-| `npm run test:watch`    | Run tests in watch mode                                                |
-| `npm run test:coverage` | Run tests and fail below 100% coverage                                 |
-| `npm run test:e2e`      | Run Playwright end-to-end tests against a production build             |
+| Command                 | What it does                                                            |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `npm run dev`           | Start the development server                                            |
+| `npm run build`         | Create the production build                                             |
+| `npm run start`         | Serve the production build with the standalone server (as in the image) |
+| `npm run verify`        | Run every gate below in order (what CI and the definition of done use)  |
+| `npm run lint`          | Run ESLint on the whole project (zero warnings)                         |
+| `npm run format`        | Format all files with Prettier                                          |
+| `npm run format:check`  | Check formatting without writing                                        |
+| `npm run typecheck`     | Run `next typegen && tsc --noEmit`                                      |
+| `npm run check:design`  | Fail on arbitrary colors or `dark:` color prefixes (see `DESIGN.md`)    |
+| `npm run check:bundle`  | Compare each route's gzipped JavaScript with `bundle-budget.json`       |
+| `npm run test`          | Run unit and integration tests once                                     |
+| `npm run test:watch`    | Run tests in watch mode                                                 |
+| `npm run test:coverage` | Run tests and fail below 100% coverage                                  |
+| `npm run test:e2e`      | Run Playwright end-to-end tests against a production build              |
 
 Before opening a pull request, run `docker compose exec web npm run verify`.
 
@@ -122,7 +124,9 @@ This project uses a single `docker-compose.yaml` for local development only. It 
 - **Run (detached):** `docker compose up -d`
   - _Starts services in the background._
 - **Run with the basic-auth gate:** `docker compose --profile gate up --build`
-  - _Starts the NGINX gate in front of the app at [http://localhost:8080](http://localhost:8080), as on the non-production environments. Credentials are optional locally: with `APP_ENV=local` and both `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` unset, the gate starts open (it logs a warning) so you can check its headers and limits without a password. Set both in `.env` to test the login prompt._
+  - _Starts the NGINX gate in front of the app at [http://localhost:8080](http://localhost:8080), as on the non-production environments. If port 8080 is taken, set another one with `GATE_PORT` (for example `GATE_PORT=18088 docker compose --profile gate up --build`). Credentials are optional locally: with `APP_ENV=local` and both `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` unset, the gate starts open (it logs a warning) so you can check its headers and limits without a password. Set both in `.env` to test the login prompt._
+- **After a dependency change:** `docker compose build web && docker compose run --rm web npm ci --ignore-scripts`
+  - _Dependencies and build output live in Compose volumes, so the Linux packages of the container never mix with the ones on your machine. `docker compose down -v` removes the volumes._
 - **Restart a service:** `docker compose restart web`
 - **Stop all:** `docker compose down`
 - **View logs:** `docker compose logs -f web`
@@ -145,8 +149,11 @@ This project uses a single `docker-compose.yaml` for local development only. It 
 - **Run end-to-end tests** (separate Playwright service, Compose profile `e2e`):
 
   ```bash
-  docker compose --profile e2e run --rm e2e
+  docker compose --profile e2e run --rm e2e                                      # every browser
+  docker compose --profile e2e run --rm e2e --project=chromium --project=mobile-chrome   # as in CI
   ```
+
+  _It builds the production app and runs Playwright in the official Playwright image. Arguments after `e2e` go to `playwright test`._
 
 - If the stack is not running, use `docker compose run --rm web npm run <script>` instead of `exec`. If Docker is not installed, run the npm scripts directly on your machine.
 - **Open an interactive shell** (the image is Alpine-based, so use `sh`):
@@ -167,7 +174,7 @@ docker build \
   -t moliveda-web:local .
 docker run --rm -p 8080:8080 --env-file .env moliveda-web:local
 
-# Basic-auth gate (available now)
+# Basic-auth gate
 docker build --target gate -t moliveda-web-gate:local .
 scripts/test-gate.sh    # builds the gate and checks 25 behaviors against a stub upstream
 ```
@@ -236,7 +243,7 @@ CI/CD also uses repository and environment settings that are not app variables: 
 - **Containers:** CI boots the production image as non-root and runs `scripts/test-gate.sh` against the gate.
 - **Accessibility target:** WCAG 2.2 AA.
 
-Measured results (test counts, coverage, Lighthouse scores) will be recorded here, with dates, once the first pages ship.
+- **Bundle size:** `npm run check:bundle` compares the gzipped JavaScript that each route loads on first visit with `bundle-budget.json`. A budget is raised only in a reviewed change.
 
 ## Known gaps
 

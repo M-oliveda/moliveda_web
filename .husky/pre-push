@@ -1,0 +1,9 @@
+# Tests related to the changes since the upstream; the full suite when the
+# branch has no upstream yet (MASTERPLAN section 9).
+set -eu
+
+if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2> /dev/null); then
+  npx --no-install vitest run --changed "$upstream" --passWithNoTests
+else
+  npx --no-install vitest run
+fi

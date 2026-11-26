@@ -1,7 +1,37 @@
-# Only Docker for now: the npm and github-actions entries are added in Phase 1,
-# when package.json and .github/workflows/ exist (MASTERPLAN.md section 12).
 version: 2
 updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    commit-message:
+      prefix: ":arrow_up:"
+    groups:
+      # Majors arrive one by one so each can be reviewed; the rest are grouped.
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: ":arrow_up:"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
   - package-ecosystem: docker
     directory: /
     target-branch: develop

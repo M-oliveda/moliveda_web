@@ -1,0 +1,27 @@
+# Gitmoji commit messages (D31): `:<shortcode>: <Capitalised message>`, no
+# trailing period, first line at most 72 characters. See https://gitmoji.dev.
+set -eu
+
+subject=$(head -n 1 "$1")
+
+# Messages that Git writes itself are accepted as they are.
+case "$subject" in
+  "Merge "* | "Revert "* | "fixup! "* | "squash! "* | "amend! "*) exit 0 ;;
+esac
+
+fail() {
+  echo "commit-msg: $1" >&2
+  echo "  got:      $subject" >&2
+  echo "  expected: :sparkles: Add experience page" >&2
+  exit 1
+}
+
+printf '%s' "$subject" | grep -Eq '^:[a-z0-9_+-]+: ' ||
+  fail "start with a Gitmoji shortcode and a space."
+printf '%s' "$subject" | grep -Eq '^:[a-z0-9_+-]+: [A-Z0-9]' ||
+  fail "capitalise the first word after the shortcode."
+printf '%s' "$subject" | grep -Eq '\.$' &&
+  fail "remove the trailing period."
+[ "$(printf '%s' "$subject" | wc -m)" -le 72 ] ||
+  fail "keep the first line at most 72 characters."
+exit 0

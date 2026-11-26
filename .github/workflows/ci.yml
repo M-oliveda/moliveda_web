@@ -1,0 +1,194 @@
+# Quality gates for every push and pull request (MASTERPLAN 10.2). `CI passed` is the only
+# required status check. The deploy calls (deploy-preview, deploy-env, deploy-prod) are added
+# in Phase 2, after `CI passed`.
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - "release/**"
+      - "hotfix/**"
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded runs are cancelled everywhere except on main.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  HUSKY: "0"
+  NEXT_TELEMETRY_DISABLED: "1"
+  # Pinned by tag and digest, like the Dockerfile base images.
+  GITLEAKS_IMAGE: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+  TRIVY_IMAGE: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      # Format check, lint, design check, typecheck, coverage gate, build.
+      - run: npm run verify
+      - run: npm run check:bundle
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  audit:
+    name: audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # gitleaks scans the whole history.
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: npm audit (runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high
+      - name: gitleaks
+        run: >
+          docker run --rm --user "$(id -u):$(id -g)"
+          -v "$GITHUB_WORKSPACE:/repo" -w /repo "$GITLEAKS_IMAGE"
+          git --redact --no-banner --verbose .
+      - name: REUSE compliance
+        uses: fsfe/reuse-action@676e2d560c9a403aa252096d99fcab3e1132b0f5 # v6.0.0
+      - name: Dependency review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          fail-on-severity: high
+          # AGPL-3.0-compatible licenses (MASTERPLAN section 11), plus the permissive and
+          # weak-copyleft licenses found in the current tree: BlueOak, 0BSD, Python/PSF
+          # (argparse), CC-BY-4.0 (caniuse-lite data), CC0-1.0 and LGPL-3.0-or-later (sharp's
+          # dynamically linked libvips).
+          allow-licenses: >-
+            MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, MPL-2.0, OFL-1.1,
+            0BSD, BlueOak-1.0.0, Python-2.0, PSF-2.0, CC-BY-4.0, CC0-1.0,
+            LGPL-3.0-or-later
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Same container as local runs: production build, then Playwright (Chromium projects).
+      - run: docker compose --profile e2e run --rm e2e --project=chromium --project=mobile-chrome
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  lighthouse:
+    name: lighthouse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      # A clean build: no cached Turbopack output from another job.
+      - run: npm run build
+      - run: npx --no-install lhci autorun
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: lighthouse
+          path: .lighthouseci/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  docker:
+    name: docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build --target runner -t moliveda-web:ci .
+      - run: docker build --target gate -t moliveda-web-gate:ci .
+      - name: Boot the runner as non-root and poll /health
+        run: |
+          docker run -d --name runner -p 8080:8080 moliveda-web:ci
+          uid="$(docker exec runner id -u)"
+          if [ "$uid" = "0" ]; then
+            echo "::error::the runner image runs as root"
+            exit 1
+          fi
+          for _ in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:8080/health; then
+              echo
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs runner
+          echo "::error::/health did not answer within 30 s"
+          exit 1
+      - name: Gate behavior
+        run: scripts/test-gate.sh
+      - name: Trivy (fixable critical findings fail)
+        run: |
+          for image in moliveda-web:ci moliveda-web-gate:ci; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" \
+              image --exit-code 1 --severity CRITICAL --ignore-unfixed --no-progress "$image"
+          done
+
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs:
+      - quality
+      - audit
+      - e2e
+      - lighthouse
+      - docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then
+              exit 1
+            fi
+          done
