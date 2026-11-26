@@ -45,6 +45,11 @@ jobs:
           URL: ${{ needs.deploy.outputs.url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # Actions drops a job output that contains a secret value, which leaves URL empty.
+          if [ -z "$URL" ]; then
+            echo "::error::The deploy job returned no URL (an output containing a secret value is dropped). Check that no secret value appears in the service name."
+            exit 1
+          fi
           marker="<!-- moliveda-web-preview -->"
           body="$(printf '%s\n%s\n\n%s\n' "$marker" \
             "**Preview:** $URL" \
