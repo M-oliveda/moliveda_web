@@ -1,6 +1,7 @@
 # Quality gates for every push and pull request (MASTERPLAN 10.2). `CI passed` is the only
-# required status check. The deploy calls (deploy-preview, deploy-env, deploy-prod) are added
-# in Phase 2, after `CI passed`.
+# required status check. The deploys are reusable workflows called after it, so nothing deploys
+# unless every gate passed: previews for pull requests into develop, development and staging on
+# pushes to develop and release/**, production on pushes to main.
 name: CI
 
 on:
@@ -231,3 +232,43 @@ jobs:
               exit 1
             fi
           done
+
+  # Deploys (MASTERPLAN 10.2). Each one runs only after `CI passed` succeeded.
+  deploy-preview:
+    name: deploy-preview
+    needs: ci-passed
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.base_ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      pull-requests: write
+    uses: ./.github/workflows/deploy-preview.yml
+    secrets: inherit
+
+  deploy-env:
+    name: deploy-env
+    needs: ci-passed
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/release/'))
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/deploy-env.yml
+    secrets: inherit
+
+  deploy-prod:
+    name: deploy-prod
+    needs: ci-passed
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/deploy-prod.yml
+    secrets: inherit
