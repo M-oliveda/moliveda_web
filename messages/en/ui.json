@@ -1,0 +1,28 @@
+{
+  "skipLink": "Skip to main content",
+  "nav": {
+    "label": "Main",
+    "about": "About",
+    "experience": "Experience",
+    "education": "Education",
+    "skills": "Skills"
+  },
+  "language": {
+    "label": "Language",
+    "en": "English",
+    "es": "Español",
+    "pt": "Português",
+    "fr": "Français"
+  },
+  "theme": {
+    "label": "Theme",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The page you are looking for does not exist or has moved.",
+    "home": "Go to the home page"
+  }
+}
