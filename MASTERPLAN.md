@@ -79,6 +79,8 @@ Personal portfolio website of **Mauricio Oliveda**, served at [https://moliveda.
 | D33 | Agent rules are enforced by `.claude/settings.json` (deny and ask lists), not only by prose in `AGENTS.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | D34 | **Origin protection.** A Cloudflare Transform Rule adds `X-Origin-Verify: <secret>` to every proxied request. In production the app answers `403` to any request without a matching value (`/health` and `/ready` excepted), with a constant-time comparison in `src/lib/origin-guard.ts`, applied in `proxy.ts` and in the API routes. The secret lives in the `production` GitHub Environment (`ORIGIN_VERIFY_SECRET`); `ORIGIN_VERIFY_SECRET_PREVIOUS` allows rotation without downtime. Only verified requests trust `CF-Connecting-IP`. The `run.app` URL stays enabled so the candidate smoke test can reach the no-traffic revision; the smoke test sends the header, read from the `production` GitHub Environment by the deployer. |
 | D35 | **Signed commits only.** The rulesets on `main` and `develop` require signed commits. Merges made through GitHub are signed by GitHub. The `pre-commit` hook fails early when `commit.gpgsign` is not `true`, and agents never pass `--no-gpg-sign`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| D36 | **Cloud Run services are deployed from a rendered manifest** (`gcloud run services replace`), not from `gcloud run deploy` flags. A gated service needs a startup probe on its `app` container and a start order (`gate` after `app`), and the CLI cannot set the probe for multi-container services. `scripts/deploy/render-service.ts` builds the manifest from `scripts/deploy/deploy-plan.ts`. Secrets go into the `0600` manifest file, each only to the container that needs it, never onto a command line, and the file is deleted after the deploy. This replaces `--env-vars-file`.                                                                                                                                                |
+| D37 | **Production gets its own deployer**, `moliveda-web-deployer`, holding only the custom role `molivedaWebDeployer` (no `run.services.delete`). The shared deployer of the production project is not changed. Development, preview and staging keep using their shared deployers (D21). The shared Workload Identity providers are never changed by this repository's scripts.                                                                                                                                                                                                                                                                                                                                                                |
 
 #### Deviations from the charter (each one is deliberate)
 
@@ -631,7 +633,7 @@ Files: `docker/nginx/nginx.conf.template`, `docker/nginx/entrypoint.sh`, the `ga
 
 Region: `us-central1` for all. The projects are shared with the owner's other repositories, so every resource name is prefixed with `moliveda-web`.
 
-Cloud Run settings for all services: 1 vCPU, 512 MiB, concurrency 80, CPU boost on, request timeout 30 s, `gen2` execution environment, labels `app=moliveda-web,env=<env>,managed-by=github-actions`, a runtime service account (`moliveda-web-runtime`) with no project roles. Gated services run two containers: `gate` on `:8080` (ingress, `--depends-on app`) and `app` on `:3000`, which must answer the startup probe on `/health` before the instance takes traffic. Production runs the app container only, on `:8080`. Cloud Run has no separate readiness probe, so `/ready` is used by the smoke tests and the uptime check.
+Cloud Run settings for all services: 1 vCPU, 512 MiB, concurrency 80, CPU boost on, request timeout 30 s, `gen2` execution environment, labels `app=moliveda-web,env=<env>,managed-by=github-actions`, a runtime service account (`moliveda-web-runtime`) with no project roles. Gated services run two containers: `gate` on `:8080` (ingress, 1 vCPU and 128 MiB, started after `app` through the `run.googleapis.com/container-dependencies` annotation) and `app` on `:3000`, which must answer its startup probe on `/health` before the gate starts. `PORT` is reserved on Cloud Run and only injected into the ingress container, so the app container runs `env PORT=3000 node server.js`. Every service disables the invoker IAM check (`run.googleapis.com/invoker-iam-disabled`), because the gate or, in production, the origin guard protects it. Production runs the app container only, on `:8080`. Cloud Run has no separate readiness probe, so `/ready` is used by the smoke tests and the uptime check.
 
 ### 10.2 Workflows
 
@@ -639,29 +641,29 @@ Deploys run **only after CI passes**. The deploy workflows are reusable workflow
 
 **`ci.yml`** (push to `main`, `develop`, `release/**`, `hotfix/**`; pull requests into `main` and `develop`):
 
-| Job          | Runs                                                                                                                                                |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `quality`    | `npm ci`, `npm run verify` (format check, lint, design check, typecheck, coverage gate, build), bundle size check, coverage uploaded as an artifact |
-| `audit`      | `npm audit --omit=dev --audit-level=high` (blocking), gitleaks, dependency review on PRs (severity and license allow-list)                          |
-| `e2e`        | Production build, Playwright (Chromium desktop and mobile), report uploaded                                                                         |
-| `lighthouse` | Clean production build (no Turbopack cache), Lighthouse CI with the budgets of 4.9, reports uploaded                                                |
-| `docker`     | Build `runner` and `gate`, boot `runner` as non-root and poll `/health`, run `scripts/test-gate.sh`, Trivy scan (fail on fixable critical findings) |
-| `CI passed`  | Aggregator: fails unless every job above succeeded. The **only** required status check.                                                             |
-| deploy calls | `deploy-preview` (PRs into `develop` from this repository), `deploy-env` (push to `develop` or `release/**`), `deploy-prod` (push to `main`)        |
+| Job          | Runs                                                                                                                                                                        |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `quality`    | `npm ci`, `npm run verify` (format check, lint, design check, typecheck, coverage gate, build), bundle size check, coverage uploaded as an artifact                         |
+| `audit`      | `npm audit --omit=dev --audit-level=high` (blocking), gitleaks, `actionlint` (workflows and their shell), REUSE, dependency review on PRs (severity and license allow-list) |
+| `e2e`        | Production build, Playwright (Chromium desktop and mobile), report uploaded                                                                                                 |
+| `lighthouse` | Clean production build (no Turbopack cache), Lighthouse CI with the budgets of 4.9, reports uploaded                                                                        |
+| `docker`     | Build `runner` and `gate`, boot `runner` as non-root and poll `/health`, run `scripts/test-gate.sh`, Trivy scan (fail on fixable critical findings)                         |
+| `CI passed`  | Aggregator: fails unless every job above succeeded. The **only** required status check.                                                                                     |
+| deploy calls | `deploy-preview` (PRs into `develop` from this repository, except Dependabot's), `deploy-env` (push to `develop` or `release/**`), `deploy-prod` (push to `main`)           |
 
 Every workflow sets `permissions: contents: read` at the top and widens it per job, sets `timeout-minutes`, pins actions to commit SHAs, and sets `HUSKY: "0"`. CI runs cancel superseded runs except on `main`; deploys use a `deploy-<service>` concurrency group with `cancel-in-progress: false`. Reports are kept 14 days.
 
-**`build-push-deploy.yml`** (reusable; inputs `environment`, `service`, `gated`, `site_url`, `min_instances`, `max_instances`; output `url`):
+**`build-push-deploy.yml`** (reusable; inputs `github_environment`, `deploy_environment`, `pr_number`; outputs `url` and `app_image`). The service, revision, tags, URLs, scaling and gating come from `scripts/deploy/deploy-plan.ts`, not from workflow inputs:
 
 1. Authenticate to the environment's project with **Workload Identity Federation** (no JSON keys).
-2. Resolve the URL. The `run.app` URL is deterministic (`<service>-<project number>.us-central1.run.app`), so it is known before the first deploy and baked into `NEXT_PUBLIC_SITE_URL`.
+2. Resolve the URL. The `run.app` URL is deterministic (`<service>-<project number>.us-central1.run.app`, with `GCP_PROJECT_NUMBER` from the environment), so it is known before the first deploy and baked into `NEXT_PUBLIC_SITE_URL`. Production uses its `NEXT_PUBLIC_SITE_URL` variable instead.
 3. Build and push the images to Docker Hub with Buildx (GitHub Actions cache, `--provenance=mode=max --sbom=true`), attest them with `actions/attest-build-provenance`, and read back their digests.
-4. Write the container environment to files with `jq` (`--env-vars-file`), so values never appear on a command line. Every environment, including production, receives its secrets this way. `--set-secrets` and Secret Manager are not used.
-5. Deploy **by digest**. Non-production: deploy and route traffic. Production: deploy with `--no-traffic --tag candidate`, smoke test the candidate through its tag URL with the `X-Origin-Verify` header, then `gcloud run services update-traffic --to-latest`. If the smoke test fails, traffic never moved.
-6. Smoke test: `/health` and `/ready` return 200; gated environments return 401 on `/` without credentials, 200 with them, and carry `X-Robots-Tag`; production returns `307` on `/`, `200` on every locale page through `https://moliveda.dev`.
+4. Render the service manifest with `scripts/deploy/render-service.ts` (D36): the container environment and secrets are written into a `0600` file, so values never appear on a command line. Every environment, including production, receives its secrets this way. `--set-secrets` and Secret Manager are not used.
+5. Deploy **by digest** with `gcloud run services replace`. Each run attempt creates a named revision (`<service>-<sha>-<run id>-<attempt>`). Non-production routes all traffic to it. Production pins 100% of traffic on the revision serving now and tags the new one `candidate`, smoke-tests the candidate through its tag URL with the `X-Origin-Verify` header, then runs `gcloud run services update-traffic --to-latest`. If the smoke test fails, traffic never moved.
+6. Smoke test (`scripts/deploy/smoke.ts`): `/health` and `/ready` return 200; gated environments return 401 on `/` without credentials, 200 with them, and carry `X-Robots-Tag`; the production candidate returns 403 on `/` without the origin header and 200 with it. Phase 3 changes that 200 to the `307` locale redirect, and Phase 7 adds `200` on every locale page through `https://moliveda.dev`.
 7. **Print the service URL** in the job log and in the job summary.
 
-**`deploy-preview.yml`**: runs only when `github.event.pull_request.head.repo.full_name == github.repository`. Uses `pull_request`, **never** `pull_request_target`, and fork PRs receive no secrets. Deploys `moliveda-web-pr-<n>` to the preview project behind the gate and keeps **one** PR comment with the URL, found by a hidden marker and updated on every push.
+**`deploy-preview.yml`**: runs only when `github.event.pull_request.head.repo.full_name == github.repository`, and skips Dependabot pull requests (Dependabot runs receive no Actions secrets). Uses `pull_request`, **never** `pull_request_target`, and fork PRs receive no secrets. Deploys `moliveda-web-pr-<n>` to the preview project behind the gate and keeps **one** PR comment with the URL, found by a hidden marker and updated on every push.
 
 **`deploy-env.yml`**: `develop` → `development`, `release/**` → `staging`, both gated. The GitHub Environment names are `develop` and `staging`. `APP_ENV` on the develop branch stays `development`.
 
@@ -669,15 +671,15 @@ Every workflow sets `permissions: contents: read` at the top and widens it per j
 
 **`cleanup-preview.yml`** (pull request closed, merged or not): deletes the `moliveda-web-pr-<n>` service if it exists, and the `pr-<n>-*` tags on Docker Hub through the Docker Hub API (cleanup token, 10.3).
 
-**`scheduled.yml`** (weekly, on `main`): full Playwright browser matrix, Lighthouse against `https://moliveda.dev`, `lychee` link check, full `npm audit` (report only), mutation tests, deletion of preview services whose PR is closed or that are older than 14 days, and Docker Hub tag pruning (keep `v*` tags and the 10 newest per environment, delete the rest after 30 days). Failures open an issue.
+**`scheduled.yml`** (weekly, on `main`): full Playwright browser matrix, Lighthouse against `https://moliveda.dev` (from Phase 7), `lychee` link check, full `npm audit` (report only), mutation tests (from Phase 8), deletion of preview services whose PR is closed or that are older than 14 days, and Docker Hub tag pruning (keep `v*` tags and the 10 newest per environment, delete the rest after 30 days). Failures open an issue.
 
 ### 10.3 Secrets and variables (GitHub Environments)
 
-GitHub Environments: `develop`, `preview`, `staging`, `production`. **Deployment branch policies:** `production` only from `main`, `staging` only from `release/*`, `develop` only from `develop`. `preview` allows `feature/*` and `hotfix/*`, which are the pull-request branches; the workflow still refuses fork pull requests. `production` also has the owner as required reviewer. `APP_ENV=development` uses the `develop` environment.
+GitHub Environments: `develop`, `preview`, `staging`, `production`. **Deployment branch policies:** `production` only from `main`, `staging` only from `release/*`, `develop` only from `develop`. `preview` allows `feature/*` and `hotfix/*`, which are the pull-request branches, plus `develop` (the closing event of a merged pull request may be matched against its base branch) and `main` (`scheduled.yml` deletes stale previews); the workflows still refuse fork pull requests. `production` also has the owner as required reviewer. `APP_ENV=development` uses the `develop` environment.
 
 | Kind     | Name                                                                                    | Scope                                                                                       |
 | -------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Secret   | `BASIC_AUTH_USERNAME`, `BASIC_AUTH_PASSWORD`                                            | `develop`, `preview`, `staging` (different values in each)                                  |
+| Secret   | `BASIC_AUTH_USERNAME`, `BASIC_AUTH_PASSWORD`                                            | `develop`, `preview`, `staging` (the same login in all three, owner decision)               |
 | Secret   | `RESEND_API_KEY`                                                                        | `staging`, `production`                                                                     |
 | Secret   | `TURNSTILE_SECRET_KEY`                                                                  | `staging`, `production`                                                                     |
 | Secret   | `ORIGIN_VERIFY_SECRET`, `ORIGIN_VERIFY_SECRET_PREVIOUS`                                 | `production` (`PREVIOUS` only while rotating)                                               |
@@ -685,6 +687,7 @@ GitHub Environments: `develop`, `preview`, `staging`, `production`. **Deployment
 | Secret   | `DOCKERHUB_CLEANUP_TOKEN`                                                               | repository (read, write and delete; used only by `cleanup-preview.yml` and `scheduled.yml`) |
 | Variable | `DOCKERHUB_USERNAME`                                                                    | repository                                                                                  |
 | Variable | `GCP_PROJECT_ID`                                                                        | per environment                                                                             |
+| Variable | `GCP_PROJECT_NUMBER`                                                                    | per environment                                                                             |
 | Variable | `GCP_REGION`                                                                            | repository (`us-central1`)                                                                  |
 | Variable | `GCP_WORKLOAD_IDENTITY_PROVIDER`                                                        | per environment                                                                             |
 | Variable | `GCP_SERVICE_ACCOUNT`                                                                   | per environment                                                                             |
@@ -693,7 +696,7 @@ GitHub Environments: `develop`, `preview`, `staging`, `production`. **Deployment
 
 There is no Google Secret Manager. Runtime secrets are GitHub Environment secrets, written into the Cloud Run environment file at deploy time. `ORIGIN_VERIFY_SECRET` and `ORIGIN_VERIFY_SECRET_PREVIOUS` belong to `production` only. The production smoke test reads `ORIGIN_VERIFY_SECRET` from that environment. Rotation steps are in `docs/runbooks/secret-rotation.md`.
 
-The Workload Identity binding for this repository is scoped by `assertion.repository_id` and `assertion.repository_owner_id` (numeric ids survive renames and prevent repo-name squatting) and, per project, by `assertion.environment` (`develop`, `preview`, `staging` or `production`).
+The Workload Identity binding for this repository is the principal set `attribute.repository/M-oliveda/moliveda_web` on each project's deployer, bound by name like the owner's other repositories. The shared providers (D21, D37) map `attribute.repository` and accept only `assertion.repository_owner == 'M-oliveda'`. Binding by numeric id would mean changing all four shared providers, and the owner chose not to. Trade-off: renaming the repository breaks deploys until `infra/gcp/config.sh` is updated and `bootstrap.sh` runs again. The binding is not scoped by `assertion.environment`. Only the deploy jobs get `id-token: write`, and the environment branch policies and the production reviewer gate them.
 
 ### 10.4 Registry flow (Docker Hub only)
 
@@ -718,13 +721,13 @@ The Workload Identity binding for this repository is scoped by `assertion.reposi
 Idempotent scripts and a runbook in `infra/gcp/` (no Terraform). Every step checks before it creates. The scripts are run by the owner with their own `gcloud` login, never by CI.
 
 1. The projects, billing links and budget caps already exist. `infra/gcp/check.sh` verifies them read-only.
-2. Enable APIs: Cloud Run, IAM Credentials, Cloud Logging, Cloud Monitoring, Cloud Trace and Error Reporting.
+2. Enable APIs: Cloud Run, IAM, IAM Credentials, Security Token Service, Cloud Logging, Cloud Monitoring, Cloud Trace and Error Reporting.
 3. Create the minimal **runtime** service account `moliveda-web-runtime` (no project roles).
-4. Bind this repository to the existing shared Workload Identity provider and deployer service account (`roles/iam.workloadIdentityUser`, scoped as in 10.3). In production the deployer has a custom role without `run.services.delete`.
-5. Production: create the uptime checks, SLOs, alert policies and dashboard from `infra/gcp/monitoring/*.json`.
-6. Cloud Run services are created by their first deploy.
+4. Let the deployer act as the runtime account (`roles/iam.serviceAccountUser`) and bind this repository to the deployer through the existing shared Workload Identity provider (`roles/iam.workloadIdentityUser`, as in 10.3). Development, preview and staging use the project's shared deployer. Production uses its own `moliveda-web-deployer` with the custom role in `infra/gcp/roles/deployer-production.yaml`, which has no `run.services.delete` (D37).
+5. Cloud Run services are created by their first deploy.
+6. Phase 7: create the uptime checks, SLOs, alert policies and dashboard from `infra/gcp/monitoring/*.json`, once production and the domain exist.
 
-`infra/gcp/check.sh` is read-only: it compares the live configuration (APIs, service accounts, IAM bindings, budgets, alert policies, domain mapping) with the expected values and exits non-zero on drift. The owner runs it before each release.
+`infra/gcp/check.sh` is read-only: it compares the live configuration (APIs, service accounts, IAM bindings, the provider mapping, billing and budgets; alert policies and the domain mapping from Phase 7) with the expected values and exits non-zero on drift. The owner runs it before each release. The run order and the warnings are in `infra/gcp/README.md`.
 
 ### 10.6 Production domain and Cloudflare (Phase 7)
 
@@ -810,15 +813,15 @@ Done when: the repo is public, protected and licensed, and `reuse lint` passes.
 
 ### Phase 1: Scaffold and quality tooling
 
-- [ ] Next 16 + TypeScript strict (section 6 flags) + Tailwind 4; `.npmrc`, `.nvmrc`, `engines`, `.editorconfig`; extend the existing `.prettierignore` with build output.
-- [ ] ESLint (zero warnings, type-checked rules, boundaries, no JSX literals), Prettier with the Tailwind plugin, `npm run verify`.
-- [ ] Husky hooks (section 9) with gitleaks.
-- [ ] Vitest with the 100% gate and the file-level exclusions; `src/test/` helpers.
-- [ ] Playwright and the `e2e` Compose service.
-- [ ] `Dockerfile` Node stages (`base`, `deps`, `dev`, `builder`, `runner`) next to the existing `gate` stage; `docker-compose.yaml` with the `gate` and `e2e` profiles.
+- [x] Next 16 + TypeScript strict (section 6 flags) + Tailwind 4; `.npmrc`, `.nvmrc`, `engines`, `.editorconfig`; extend the existing `.prettierignore` with build output.
+- [x] ESLint (zero warnings, type-checked rules, boundaries, no JSX literals), Prettier with the Tailwind plugin, `npm run verify`.
+- [x] Husky hooks (section 9) with gitleaks.
+- [x] Vitest with the 100% gate and the file-level exclusions; `src/test/` helpers.
+- [x] Playwright and the `e2e` Compose service.
+- [x] `Dockerfile` Node stages (`base`, `deps`, `dev`, `builder`, `runner`) next to the existing `gate` stage; `docker-compose.yaml` with the `gate` and `e2e` profiles.
 - [x] NGINX gate: `docker/nginx/`, `gate` stage, `.dockerignore`, `scripts/test-gate.sh` (25 checks pass). Credentials are optional only when `APP_ENV=local`.
-- [ ] Add `CI passed` as the required status check to the `main` and `develop` rulesets (section 9).
-- [ ] `ci.yml` with the `quality`, `audit`, `e2e`, `lighthouse`, `docker` and `CI passed` jobs; actions pinned to SHAs; bundle size baseline measured on the blank app.
+- [x] Add `CI passed` as the required status check to the `main` and `develop` rulesets (section 9).
+- [x] `ci.yml` with the `quality`, `audit`, `e2e`, `lighthouse`, `docker` and `CI passed` jobs; actions pinned to SHAs; bundle size baseline measured on the blank app.
 
 Done when: `npm run verify` and `docker compose up --build` pass on a blank app, and CI is green.
 
@@ -831,10 +834,12 @@ Done when: `npm run verify` and `docker compose up --build` pass on a blank app,
 
 Done when: a push to `develop` deploys to development behind the gate and prints the URL, and a PR gets a gated preview that is deleted on close.
 
+Status: the code for every task above is built and checked locally (`npm run verify`, `actionlint`, `shellcheck`; the scripts are tested against a fake `gcloud` and fake HTTP). The boxes are ticked once the owner has run the bootstrap, set the GitHub settings and seen the first preview and development deploys (`docs/runbooks/first-deploy.md`). The origin guard, `env.ts`, `/ready` and `instrumentation.node.ts` were brought forward from Phase 3, because the deploys need them.
+
 ### Phase 3: i18n foundation and shell
 
 - [ ] next-intl routing, `proxy.ts`, `messages/{locale}/` structure, merged messages in `request.ts`, typed messages, `onError` and `getMessageFallback`, `Vary` on the `/` redirect.
-- [ ] `env.ts`, `logger.ts` (redaction), correlation id, errors module, `/ready` (`connection()`), `instrumentation.node.ts`. The `/health` liveness probe was brought forward to Phase 1, because the runner `HEALTHCHECK` and the CI `docker` job need it.
+- [ ] `logger.ts` (redaction), correlation id, errors module. The `/health` liveness probe was brought forward to Phase 1, because the runner `HEALTHCHECK` and the CI `docker` job need it; `env.ts`, `/ready` (`connection()`) and `instrumentation.node.ts` were brought forward to Phase 2, because the deploys need them. Phase 3 extends `env.ts` with its own keys, and the production smoke test's `/` check becomes the `307` locale redirect.
 - [ ] Theme provider, `MotionConfig` with `LazyMotion`.
 
 Done when: `/` redirects correctly for each `Accept-Language`, the probes are tested, and a missing key fails the build.
@@ -868,7 +873,8 @@ Done when: Lighthouse meets the blocking budgets on all pages and the headers ar
 ### Phase 7: Production launch
 
 - [ ] Cloudflare setup and domain mapping (10.6), DMARC, CAA, DNSSEC.
-- [ ] Uptime checks, SLOs, alerts and dashboard.
+- [ ] Uptime checks, SLOs, alerts and dashboard (`infra/gcp/monitoring/`, verified by `check.sh`).
+- [ ] Production smoke checks through `https://moliveda.dev`, Lighthouse against the live site in `scheduled.yml`, and removing the `moliveda.dev` exclusion from its link check.
 - [ ] Native review of the French, Spanish and Portuguese text recorded in `messages/REVIEW.md`.
 - [ ] Resend production send test; release `v1.0.0` through `deploy-prod.yml`.
 
@@ -884,21 +890,23 @@ Done when: `https://moliveda.dev` serves all four locales through Cloudflare, an
 
 ## 13. Risks
 
-| Risk                                                                                                  | Impact | Mitigation                                                                                                                                                                                           |
-| ----------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Very new toolchain (TypeScript 7, ESLint 10, Vitest 5, Node 26) has plugin gaps                       | Medium | Checked in Phase 1: TypeScript 7 and ESLint 10 were blocked by plugins, so the project uses TypeScript 6.0 and ESLint 9.39. Node 26, Vitest 5 and Next 16.4 work. Re-check at each Dependabot major. |
-| 100% coverage is hard with async Server Components and v8 branch counting                             | Medium | Thin route files, logic in tested units, file-level exclusions only.                                                                                                                                 |
-| In-memory rate limiting is per instance                                                               | Low    | Cloudflare's edge rate limit, Turnstile and the honeypot are the primary defenses.                                                                                                                   |
-| Cloud Run domain mapping is a Preview feature ("not production-ready", possible extra latency)        | Medium | Cloudflare caches the pages, so most requests never reach it. Fallback: an external Application Load Balancer (fixed monthly cost).                                                                  |
-| The Google-managed certificate cannot renew while the record is proxied                               | Medium | Certificate-expiry alert. If renewal stalls, switch the record to DNS only until the certificate renews, then proxy again. Verify the behavior after the first renewal.                              |
-| Direct requests to Google's front end bypass Cloudflare (WAF, rate limit, spoofed `CF-Connecting-IP`) | Low    | Origin guard: production rejects requests without the Cloudflare secret header, and only verified requests trust `CF-Connecting-IP`.                                                                 |
-| Docker Hub availability, pull limits and the up-to-one-hour image cache on Cloud Run                  | Low    | Deploy by digest; retry the deploy; the previous revision keeps serving. Owner accepted.                                                                                                             |
-| The gate's client-IP key (rightmost `X-Forwarded-For`) may not be the client on Cloud Run             | Low    | Confirm on the first gated deploy by logging the header; the per-instance cap still limits guessing.                                                                                                 |
-| Secrets are visible in the Cloud Run configuration, including production                              | Low    | Single-owner project and unique values per environment. GitHub injects them at deploy, so anyone who can view the service can read them.                                                             |
-| Public image and repo reveal build output                                                             | Low    | No secrets in images or history. Push protection and gitleaks on. Provenance attestations.                                                                                                           |
-| Translation quality (especially French, owner is a beginner)                                          | Medium | Draft by Claude, review by native speakers before launch, recorded in `messages/REVIEW.md`. Content parity tests only check structure.                                                               |
-| Light-theme focus ring and status colors fail WCAG contrast (see 2.4)                                 | Medium | Fix decided in 2.4, built in Phase 4. The keyboard-walk test and axe in CI catch regressions.                                                                                                        |
-| Mobile Lighthouse Performance below 95 because of the framework runtime                               | Low    | Performance warns instead of failing; the bundle size check tracks route JS from Phase 1.                                                                                                            |
+| Risk                                                                                                  | Impact | Mitigation                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Very new toolchain (TypeScript 7, ESLint 10, Vitest 5, Node 26) has plugin gaps                       | Medium | Checked in Phase 1: TypeScript 7 and ESLint 10 were blocked by plugins, so the project uses TypeScript 6.0 and ESLint 9.39. Node 26, Vitest 5 and Next 16.4 work. Re-check at each Dependabot major.                       |
+| 100% coverage is hard with async Server Components and v8 branch counting                             | Medium | Thin route files, logic in tested units, file-level exclusions only.                                                                                                                                                       |
+| In-memory rate limiting is per instance                                                               | Low    | Cloudflare's edge rate limit, Turnstile and the honeypot are the primary defenses.                                                                                                                                         |
+| Cloud Run domain mapping is a Preview feature ("not production-ready", possible extra latency)        | Medium | Cloudflare caches the pages, so most requests never reach it. Fallback: an external Application Load Balancer (fixed monthly cost).                                                                                        |
+| The Google-managed certificate cannot renew while the record is proxied                               | Medium | Certificate-expiry alert. If renewal stalls, switch the record to DNS only until the certificate renews, then proxy again. Verify the behavior after the first renewal.                                                    |
+| Direct requests to Google's front end bypass Cloudflare (WAF, rate limit, spoofed `CF-Connecting-IP`) | Low    | Origin guard: production rejects requests without the Cloudflare secret header, and only verified requests trust `CF-Connecting-IP`.                                                                                       |
+| Docker Hub availability, pull limits and the up-to-one-hour image cache on Cloud Run                  | Low    | Deploy by digest; retry the deploy; the previous revision keeps serving. Owner accepted.                                                                                                                                   |
+| The gate's client-IP key (rightmost `X-Forwarded-For`) may not be the client on Cloud Run             | Low    | Confirm on the first gated deploy by logging the header; the per-instance cap still limits guessing.                                                                                                                       |
+| Cloud Run may reject an image index that carries provenance and SBOM attestations                     | Low    | Images are built for `linux/amd64` only. If a deploy is refused, deploy the platform manifest digest (`docs/runbooks/first-deploy.md`).                                                                                    |
+| The Workload Identity binding is not scoped by GitHub Environment (shared providers, D37)             | Low    | Only deploy jobs get `id-token: write`; environment branch policies and the production reviewer gate them; production has its own deployer that cannot delete.                                                             |
+| Secrets are visible in the Cloud Run configuration, including production                              | Low    | Single-owner project. Production secrets are its own; the gated environments share one gate login, which protects only non-public builds. GitHub injects them at deploy, so anyone who can view the service can read them. |
+| Public image and repo reveal build output                                                             | Low    | No secrets in images or history. Push protection and gitleaks on. Provenance attestations.                                                                                                                                 |
+| Translation quality (especially French, owner is a beginner)                                          | Medium | Draft by Claude, review by native speakers before launch, recorded in `messages/REVIEW.md`. Content parity tests only check structure.                                                                                     |
+| Light-theme focus ring and status colors fail WCAG contrast (see 2.4)                                 | Medium | Fix decided in 2.4, built in Phase 4. The keyboard-walk test and axe in CI catch regressions.                                                                                                                              |
+| Mobile Lighthouse Performance below 95 because of the framework runtime                               | Low    | Performance warns instead of failing; the bundle size check tracks route JS from Phase 1.                                                                                                                                  |
 
 ---
 
