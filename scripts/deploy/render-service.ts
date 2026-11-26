@@ -20,7 +20,6 @@ import {
   parseDeployInput,
   SERVICE_NAME,
 } from "./deploy-plan.ts";
-import { APP_REPOSITORY, GATE_REPOSITORY } from "./dockerhub-tags.ts";
 
 import type { IDeployPlan } from "./deploy-plan.ts";
 
@@ -119,11 +118,6 @@ export interface IServiceManifest {
   };
 }
 
-// A Docker Hub image by tag. Cloud Run resolves the tag to a digest when it creates the
-// revision, and `verify-digests.ts` checks that digest against the one CI pushed (10.2 step 5).
-// A digest reference is refused: Cloud Run reports a just-pushed Docker Hub digest as not found.
-const TAGGED_IMAGE =
-  /^docker\.io\/[a-z0-9._-]+\/([a-z0-9._-]+):([\w][\w.-]{0,127})$/;
 const REVISION_NAME = /^[a-z0-9-]+$/;
 
 function startupProbe(port: number): IProbe {
@@ -143,20 +137,20 @@ function present(env: IRenderInput["env"], keys: readonly string[]): IEnvVar[] {
   });
 }
 
-/** The image must be `docker.io/<user>/<repository>:<tag>` with this run's tag. */
-function requireTaggedImage(
+/**
+ * The image must be the one the plan names: this environment's Artifact Registry repository and
+ * this run's tag (10.4). Cloud Run resolves the tag to a digest when it creates the revision,
+ * and `verify-digests.ts` checks that digest against the one CI pushed.
+ */
+function requirePlannedImage(
   image: string | undefined,
   name: string,
-  repository: string,
-  tag: string
+  expected: string
 ): string {
-  const match = TAGGED_IMAGE.exec(image ?? "");
-  if (match?.[1] !== repository || match[2] !== tag) {
-    throw new DeployConfigError(
-      `${name} must be docker.io/<user>/${repository}:${tag}`
-    );
+  if (image !== expected) {
+    throw new DeployConfigError(`${name} must be ${expected}`);
   }
-  return match[0];
+  return expected;
 }
 
 /** The app container's variables. Origin secrets go to production only. */
@@ -189,11 +183,10 @@ export function gateEnv(input: IRenderInput): IEnvVar[] {
 }
 
 export function containers(input: IRenderInput): IContainer[] {
-  const appImage = requireTaggedImage(
+  const appImage = requirePlannedImage(
     input.appImage,
     "APP_IMAGE",
-    APP_REPOSITORY,
-    input.plan.appTag
+    input.plan.appImage
   );
   if (!input.plan.gated) {
     return [
@@ -210,11 +203,10 @@ export function containers(input: IRenderInput): IContainer[] {
   return [
     {
       name: "gate",
-      image: requireTaggedImage(
+      image: requirePlannedImage(
         input.gateImage,
         "GATE_IMAGE",
-        GATE_REPOSITORY,
-        input.plan.gateTag
+        input.plan.gateImage
       ),
       ports: [{ containerPort: INGRESS_PORT }],
       env: gateEnv(input),

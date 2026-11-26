@@ -49,11 +49,11 @@ function revision(statuses: readonly Record<string, string>[]): unknown {
 const GATED_REVISION = revision([
   {
     name: "gate",
-    imageDigest: `mirror.gcr.io/someone/moliveda-web-gate@${GATE_AMD64}`,
+    imageDigest: `us-central1-docker.pkg.dev/project/moliveda-web/gate@${GATE_AMD64}`,
   },
   {
     name: "app",
-    imageDigest: `mirror.gcr.io/someone/moliveda-web@${APP_AMD64}`,
+    imageDigest: `us-central1-docker.pkg.dev/project/moliveda-web/app@${APP_AMD64}`,
   },
 ]);
 
@@ -105,8 +105,14 @@ describe("resolvedDigests", () => {
   it("skips malformed statuses", () => {
     const resolved = resolvedDigests(
       revision([
-        { name: "app", imageDigest: "mirror.gcr.io/someone/moliveda-web:tag" },
-        { imageDigest: `mirror.gcr.io/someone/moliveda-web@${APP_AMD64}` },
+        {
+          name: "app",
+          imageDigest:
+            "us-central1-docker.pkg.dev/project/moliveda-web/app:tag",
+        },
+        {
+          imageDigest: `us-central1-docker.pkg.dev/project/moliveda-web/app@${APP_AMD64}`,
+        },
       ])
     );
 

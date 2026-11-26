@@ -19,6 +19,11 @@ export type DeployEnvironment = (typeof DEPLOY_ENVIRONMENTS)[number];
 
 export const SERVICE_NAME = "moliveda-web";
 
+/** The Artifact Registry repository in each project (`infra/gcp/config.sh`, 10.4). */
+export const REGISTRY_REPOSITORY = "moliveda-web";
+export const APP_IMAGE_NAME = "app";
+export const GATE_IMAGE_NAME = "gate";
+
 /** Cloud Run settings per environment (10.1). */
 export interface IEnvironmentSettings {
   readonly gated: boolean;
@@ -42,6 +47,7 @@ export interface IDeployInput {
   readonly environment: DeployEnvironment;
   readonly sha: string;
   readonly prNumber: number | undefined;
+  readonly projectId: string;
   readonly projectNumber: string;
   readonly region: string;
   readonly runId: string;
@@ -57,6 +63,11 @@ export interface IDeployPlan {
   readonly revision: string;
   readonly appTag: string;
   readonly gateTag: string;
+  /** `<region>-docker.pkg.dev/<project>/moliveda-web`. */
+  readonly registry: string;
+  /** The image references the manifest uses, by this run's tags. */
+  readonly appImage: string;
+  readonly gateImage: string;
   readonly url: string;
   /** Only in production: the tag URL of the no-traffic candidate. */
   readonly candidateUrl: string | undefined;
@@ -73,6 +84,7 @@ export class DeployConfigError extends Error {
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const DIGITS = /^[1-9][0-9]*$/;
 const REGION_PATTERN = /^[a-z]+-[a-z]+[0-9]+$/;
+const PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 // Cloud Run resource names: lowercase letters, digits and hyphens, at most 63 characters.
 const MAX_NAME_LENGTH = 63;
 
@@ -108,6 +120,7 @@ export function parseDeployInput(
     environment,
     sha: required(source, "GITHUB_SHA", SHA_PATTERN),
     prNumber,
+    projectId: required(source, "GCP_PROJECT_ID", PROJECT_ID_PATTERN),
     projectNumber: required(source, "GCP_PROJECT_NUMBER", DIGITS),
     region: required(source, "GCP_REGION", REGION_PATTERN),
     runId: required(source, "GITHUB_RUN_ID", DIGITS),
@@ -131,9 +144,8 @@ export function shortSha(sha: string): string {
 }
 
 /**
- * `<sha>-<run id>-<run attempt>`. Every run attempt pushes a new digest, so every tag is new:
- * Cloud Run resolves Docker Hub tags through a cache that may keep an old tag for up to an
- * hour, and a reused tag could resolve to an earlier build (10.4).
+ * `<sha>-<run id>-<run attempt>`. Every run attempt pushes a new digest under a new tag, so a
+ * tag always names exactly one build and `verify-digests.ts` can tell builds apart (10.4).
  */
 export function buildId(input: IDeployInput): string {
   return `${shortSha(input.sha)}-${input.runId}-${input.runAttempt}`;
@@ -144,6 +156,11 @@ export function appImageTag(input: IDeployInput): string {
   return input.environment === "preview"
     ? `pr-${String(input.prNumber)}-${buildId(input)}`
     : `${input.environment}-${buildId(input)}`;
+}
+
+/** The Docker registry path of the environment's repository (10.4). */
+export function registryPath(input: IDeployInput): string {
+  return `${input.region}-docker.pkg.dev/${input.projectId}/${REGISTRY_REPOSITORY}`;
 }
 
 /** The `run.app` URL is deterministic, so it is known before the first deploy (10.2 step 2). */
@@ -171,13 +188,19 @@ export function revisionName(input: IDeployInput, service: string): string {
 export function createDeployPlan(input: IDeployInput): IDeployPlan {
   const settings = ENVIRONMENT_SETTINGS[input.environment];
   const service = serviceName(input.environment, input.prNumber);
+  const registry = registryPath(input);
+  const appTag = appImageTag(input);
+  const gateTag = buildId(input);
   return {
     environment: input.environment,
     ...settings,
     service,
     revision: revisionName(input, service),
-    appTag: appImageTag(input),
-    gateTag: buildId(input),
+    appTag,
+    gateTag,
+    registry,
+    appImage: `${registry}/${APP_IMAGE_NAME}:${appTag}`,
+    gateImage: `${registry}/${GATE_IMAGE_NAME}:${gateTag}`,
     url: serviceUrl(service, input.projectNumber, input.region),
     candidateUrl:
       input.environment === "production"
@@ -195,6 +218,9 @@ export function formatOutputs(plan: IDeployPlan): string {
     revision: plan.revision,
     app_tag: plan.appTag,
     gate_tag: plan.gateTag,
+    registry: plan.registry,
+    app_image: plan.appImage,
+    gate_image: plan.gateImage,
     url: plan.url,
     candidate_url: plan.candidateUrl ?? "",
   };

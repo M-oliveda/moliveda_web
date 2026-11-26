@@ -1,8 +1,8 @@
 /**
- * Post-deploy image check (MASTERPLAN 10.2 step 5 and 10.4). The manifest references the Docker
- * Hub images by tag, and Cloud Run resolves each tag to a digest when it creates the revision.
- * This checks that every container of the new revision runs the digest CI pushed, so a stale
- * cached tag can never ship.
+ * Post-deploy image check (MASTERPLAN 10.2 step 5 and 10.4). The manifest references the
+ * Artifact Registry images by tag, and Cloud Run resolves each tag to a digest when it creates
+ * the revision. This checks that every container of the new revision runs the digest CI pushed,
+ * so a moved or reused tag can never ship another build.
  *
  *   node scripts/deploy/verify-digests.ts <revision.json> <container>=<digest>=<index.json>...
  *
@@ -89,7 +89,7 @@ export function resolvedDigests(revision: unknown): Map<string, string> {
       typeof status.name === "string" &&
       typeof status.imageDigest === "string"
     ) {
-      // `mirror.gcr.io/<user>/<repository>@sha256:<hex>`: keep the digest only.
+      // `<registry>/<image>@sha256:<hex>`: keep the digest only.
       const digest = status.imageDigest.slice(
         status.imageDigest.lastIndexOf("@") + 1
       );

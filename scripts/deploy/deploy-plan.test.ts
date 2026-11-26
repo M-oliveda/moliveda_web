@@ -11,6 +11,8 @@ import {
 } from "./deploy-plan.ts";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
+const REGISTRY =
+  "us-central1-docker.pkg.dev/moliveda-gcloudprojects-dev/moliveda-web";
 
 function source(
   overrides: Record<string, string | undefined> = {}
@@ -18,6 +20,7 @@ function source(
   return {
     DEPLOY_ENVIRONMENT: "development",
     GITHUB_SHA: SHA,
+    GCP_PROJECT_ID: "moliveda-gcloudprojects-dev",
     GCP_PROJECT_NUMBER: "123456789012",
     GCP_REGION: "us-central1",
     GITHUB_RUN_ID: "16000000001",
@@ -32,6 +35,7 @@ describe("parseDeployInput", () => {
       environment: "development",
       sha: SHA,
       prNumber: undefined,
+      projectId: "moliveda-gcloudprojects-dev",
       projectNumber: "123456789012",
       region: "us-central1",
       runId: "16000000001",
@@ -60,6 +64,8 @@ describe("parseDeployInput", () => {
     ["DEPLOY_ENVIRONMENT", undefined],
     ["GITHUB_SHA", "0123456"],
     ["GCP_PROJECT_NUMBER", "moliveda-gcloudprojects-dev"],
+    ["GCP_PROJECT_ID", "Moliveda_Dev"],
+    ["GCP_PROJECT_ID", undefined],
     ["GCP_REGION", "us central1"],
     ["GITHUB_RUN_ID", "0"],
     ["GITHUB_RUN_ATTEMPT", ""],
@@ -82,6 +88,9 @@ describe("createDeployPlan", () => {
       revision: "moliveda-web-0123456789ab-16000000001-1",
       appTag: "development-0123456789ab-16000000001-1",
       gateTag: "0123456789ab-16000000001-1",
+      registry: `${REGISTRY}`,
+      appImage: `${REGISTRY}/app:development-0123456789ab-16000000001-1`,
+      gateImage: `${REGISTRY}/gate:0123456789ab-16000000001-1`,
       url: "https://moliveda-web-123456789012.us-central1.run.app",
       candidateUrl: undefined,
     });
@@ -96,6 +105,9 @@ describe("createDeployPlan", () => {
 
     expect(plan.service).toBe("moliveda-web-pr-7");
     expect(plan.appTag).toBe("pr-7-0123456789ab-16000000001-1");
+    expect(plan.appImage).toBe(
+      `${REGISTRY}/app:pr-7-0123456789ab-16000000001-1`
+    );
     expect(plan.maxInstances).toBe(1);
     expect(plan.url).toBe(
       "https://moliveda-web-pr-7-123456789012.us-central1.run.app"
@@ -161,6 +173,9 @@ describe("formatOutputs", () => {
       "revision=moliveda-web-0123456789ab-16000000001-1",
       "app_tag=development-0123456789ab-16000000001-1",
       "gate_tag=0123456789ab-16000000001-1",
+      `registry=${REGISTRY}`,
+      `app_image=${REGISTRY}/app:development-0123456789ab-16000000001-1`,
+      `gate_image=${REGISTRY}/gate:0123456789ab-16000000001-1`,
       "url=https://moliveda-web-123456789012.us-central1.run.app",
       "candidate_url=",
       "",
