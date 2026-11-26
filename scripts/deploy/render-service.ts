@@ -20,6 +20,7 @@ import {
   parseDeployInput,
   SERVICE_NAME,
 } from "./deploy-plan.ts";
+import { APP_REPOSITORY, GATE_REPOSITORY } from "./dockerhub-tags.ts";
 
 import type { IDeployPlan } from "./deploy-plan.ts";
 
@@ -118,8 +119,11 @@ export interface IServiceManifest {
   };
 }
 
-const DIGEST_IMAGE =
-  /^docker\.io\/[a-z0-9._-]+\/[a-z0-9._-]+@sha256:[0-9a-f]{64}$/;
+// A Docker Hub image by tag. Cloud Run resolves the tag to a digest when it creates the
+// revision, and `verify-digests.ts` checks that digest against the one CI pushed (10.2 step 5).
+// A digest reference is refused: Cloud Run reports a just-pushed Docker Hub digest as not found.
+const TAGGED_IMAGE =
+  /^docker\.io\/[a-z0-9._-]+\/([a-z0-9._-]+):([\w][\w.-]{0,127})$/;
 const REVISION_NAME = /^[a-z0-9-]+$/;
 
 function startupProbe(port: number): IProbe {
@@ -139,13 +143,20 @@ function present(env: IRenderInput["env"], keys: readonly string[]): IEnvVar[] {
   });
 }
 
-function requireDigest(image: string | undefined, name: string): string {
-  if (image === undefined || !DIGEST_IMAGE.test(image)) {
+/** The image must be `docker.io/<user>/<repository>:<tag>` with this run's tag. */
+function requireTaggedImage(
+  image: string | undefined,
+  name: string,
+  repository: string,
+  tag: string
+): string {
+  const match = TAGGED_IMAGE.exec(image ?? "");
+  if (match?.[1] !== repository || match[2] !== tag) {
     throw new DeployConfigError(
-      `${name} must be a docker.io image pinned by digest`
+      `${name} must be docker.io/<user>/${repository}:${tag}`
     );
   }
-  return image;
+  return match[0];
 }
 
 /** The app container's variables. Origin secrets go to production only. */
@@ -178,7 +189,12 @@ export function gateEnv(input: IRenderInput): IEnvVar[] {
 }
 
 export function containers(input: IRenderInput): IContainer[] {
-  const appImage = requireDigest(input.appImage, "APP_IMAGE");
+  const appImage = requireTaggedImage(
+    input.appImage,
+    "APP_IMAGE",
+    APP_REPOSITORY,
+    input.plan.appTag
+  );
   if (!input.plan.gated) {
     return [
       {
@@ -194,7 +210,12 @@ export function containers(input: IRenderInput): IContainer[] {
   return [
     {
       name: "gate",
-      image: requireDigest(input.gateImage, "GATE_IMAGE"),
+      image: requireTaggedImage(
+        input.gateImage,
+        "GATE_IMAGE",
+        GATE_REPOSITORY,
+        input.plan.gateTag
+      ),
       ports: [{ containerPort: INGRESS_PORT }],
       env: gateEnv(input),
       resources: { limits: { cpu: "1", memory: "128Mi" } },

@@ -7,9 +7,9 @@ import { renderService } from "./render-service.ts";
 import type { DeployEnvironment } from "./deploy-plan.ts";
 import type { IRenderInput } from "./render-service.ts";
 
-const DIGEST = "a".repeat(64);
-const APP_IMAGE = `docker.io/someone/moliveda-web@sha256:${DIGEST}`;
-const GATE_IMAGE = `docker.io/someone/moliveda-web-gate@sha256:${DIGEST}`;
+const BUILD = "0123456789ab-16000000001-2";
+const APP_IMAGE = `docker.io/someone/moliveda-web:development-${BUILD}`;
+const GATE_IMAGE = `docker.io/someone/moliveda-web-gate:${BUILD}`;
 const GATE_SECRETS = {
   BASIC_AUTH_USERNAME: "reviewer",
   BASIC_AUTH_PASSWORD: "gate-password",
@@ -34,8 +34,8 @@ function input(
   return {
     plan,
     projectId: "moliveda-gcloudprojects-dev",
-    appImage: APP_IMAGE,
-    gateImage: GATE_IMAGE,
+    appImage: `docker.io/someone/moliveda-web:${plan.appTag}`,
+    gateImage: `docker.io/someone/moliveda-web-gate:${plan.gateTag}`,
     currentRevision: undefined,
     env: { ...GATE_SECRETS, ORIGIN_VERIFY_SECRET: ORIGIN_SECRET },
     ...overrides,
@@ -143,17 +143,40 @@ describe("renderService for a gated environment", () => {
     );
   });
 
-  it("refuses images that are not pinned by digest", () => {
-    expect(() =>
-      renderService(input("development", { gateImage: undefined }))
-    ).toThrow("GATE_IMAGE must be a docker.io image pinned by digest");
-    expect(() =>
-      renderService(
-        input("development", {
-          appImage: "docker.io/someone/moliveda-web:latest",
-        })
-      )
-    ).toThrow("APP_IMAGE must be a docker.io image pinned by digest");
+  it.each([
+    ["a missing gate image", { gateImage: undefined }, "GATE_IMAGE"],
+    [
+      "another tag",
+      { appImage: "docker.io/someone/moliveda-web:latest" },
+      "APP_IMAGE",
+    ],
+    [
+      "the tag of an earlier run attempt",
+      {
+        gateImage:
+          "docker.io/someone/moliveda-web-gate:0123456789ab-16000000001-1",
+      },
+      "GATE_IMAGE",
+    ],
+    [
+      "a digest reference",
+      { appImage: `docker.io/someone/moliveda-web@sha256:${"a".repeat(64)}` },
+      "APP_IMAGE",
+    ],
+    [
+      "another repository",
+      { appImage: `docker.io/someone/moliveda-web-gate:development-${BUILD}` },
+      "APP_IMAGE",
+    ],
+    [
+      "another registry",
+      { appImage: `ghcr.io/someone/moliveda-web:development-${BUILD}` },
+      "APP_IMAGE",
+    ],
+  ] as const)("refuses %s", (_, overrides, name) => {
+    expect(() => renderService(input("development", overrides))).toThrow(
+      new RegExp(`^${name} must be docker\\.io/<user>/`)
+    );
   });
 });
 
