@@ -106,7 +106,7 @@ In VS Code, install the recommended extensions (Prettier and markdownlint) when 
 | `npm run build`         | Create the production build                                             |
 | `npm run start`         | Serve the production build with the standalone server (as in the image) |
 | `npm run verify`        | Run every gate below in order (what CI and the definition of done use)  |
-| `npm run lint`          | Run ESLint on the whole project (zero warnings)                         |
+| `npm run lint`          | Run `next typegen`, then ESLint on the whole project (zero warnings)    |
 | `npm run format`        | Format all files with Prettier                                          |
 | `npm run format:check`  | Check formatting without writing                                        |
 | `npm run typecheck`     | Run `next typegen && tsc --noEmit`                                      |
