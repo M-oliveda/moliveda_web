@@ -94,6 +94,41 @@ expected_role_permissions() {
     sed -n 's/^  - \(.*\)$/\1/p' "$ROLE_FILE" | sort
 }
 
+repository_exists() {
+    gcloud artifacts repositories describe "$REGISTRY_REPOSITORY" --location "$REGION" \
+        --project "$PROJECT_ID" --format='value(name)' > /dev/null 2>&1
+}
+
+# "<format> <dry run>" of the repository, for example "DOCKER False".
+repository_settings() {
+    gcloud artifacts repositories describe "$REGISTRY_REPOSITORY" --location "$REGION" \
+        --project "$PROJECT_ID" --format='value(format,cleanupPolicyDryRun)'
+}
+
+# Names of the live cleanup policies, sorted, one per line.
+cleanup_policy_names() {
+    gcloud artifacts repositories describe "$REGISTRY_REPOSITORY" --location "$REGION" \
+        --project "$PROJECT_ID" --format='json(cleanupPolicies)' |
+        sed -n 's/^ *"id": "\(.*\)",*$/\1/p' | sort
+}
+
+# Names of the cleanup policies in the environment's file, sorted, one per line.
+expected_cleanup_policy_names() {
+    sed -n 's/^ *"name": "\(.*\)",*$/\1/p' "$(cleanup_policy_file)" | sort
+}
+
+# True when the live policies match the file and are applied, not only logged (dry run).
+cleanup_policies_current() {
+    dry_run="$(repository_settings | awk '{ print $2 }')"
+    [ "$dry_run" != "True" ] && [ "$(cleanup_policy_names)" = "$(expected_cleanup_policy_names)" ]
+}
+
+repository_policy() {
+    gcloud artifacts repositories get-iam-policy "$REGISTRY_REPOSITORY" --location "$REGION" \
+        --project "$PROJECT_ID" --flatten='bindings[].members' \
+        --format='value(bindings.role,bindings.members)' 2> /dev/null || true
+}
+
 # True when the provider JSON maps `attribute.repository` (the key itself, not a longer one).
 provider_maps_repository() {
     printf '%s' "$1" | grep -q '"attribute\.repository"'

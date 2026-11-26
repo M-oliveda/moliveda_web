@@ -7,8 +7,10 @@
 #   infra/gcp/bootstrap.sh <dev|prev|stg|prod> [--dry-run]
 #
 # Steps: enable the APIs; create the runtime service account (no roles); in production, create
-# the deployer and its custom role; let the deployer act as the runtime account; let this
-# repository impersonate the deployer through Workload Identity Federation.
+# the deployer and its custom role; create the Artifact Registry repository and apply its
+# cleanup policies (in production, let the deployer push to it); let the deployer act as the
+# runtime account; let this repository impersonate the deployer through Workload Identity
+# Federation.
 
 set -eu
 
@@ -81,6 +83,42 @@ if [ "$GITHUB_ENVIRONMENT" = "production" ]; then
     else
         mutate projects add-iam-policy-binding "$PROJECT_ID" \
             --member "serviceAccount:$DEPLOYER_SA" --role "$ROLE" --condition None
+    fi
+fi
+
+info "Artifact Registry repository $REGISTRY_REPOSITORY"
+if repository_exists; then
+    ok "$REGISTRY_REPOSITORY in $REGION"
+else
+    mutate artifacts repositories create "$REGISTRY_REPOSITORY" --repository-format docker \
+        --location "$REGION" --project "$PROJECT_ID" \
+        --description "moliveda-web images (app, gate), cleaned up by policy"
+fi
+if [ "$DRY_RUN" = 1 ] && ! repository_exists; then
+    info "  would  apply $(cleanup_policy_file)"
+elif cleanup_policies_current; then
+    ok "cleanup policies match $(basename "$(cleanup_policy_file)")"
+else
+    # Remove the policies the file no longer lists, then apply the file.
+    expected="$(expected_cleanup_policy_names)"
+    stale="$(cleanup_policy_names | while read -r name; do
+        printf '%s\n' "$expected" | grep -Fxq "$name" || printf '%s\n' "$name"
+    done | paste -sd ',' -)"
+    if [ -n "$stale" ]; then
+        mutate artifacts repositories delete-cleanup-policies "$REGISTRY_REPOSITORY" \
+            --policynames "$stale" --location "$REGION" --project "$PROJECT_ID"
+    fi
+    mutate artifacts repositories set-cleanup-policies "$REGISTRY_REPOSITORY" \
+        --policy "$(cleanup_policy_file)" --no-dry-run --location "$REGION" --project "$PROJECT_ID"
+fi
+if [ "$GITHUB_ENVIRONMENT" = "production" ]; then
+    # Push rights on this repository only. The shared deployers hold them at project level.
+    if has_binding "$(repository_policy)" roles/artifactregistry.writer "serviceAccount:$DEPLOYER_SA"; then
+        ok "deployer may push to $REGISTRY_REPOSITORY"
+    else
+        mutate artifacts repositories add-iam-policy-binding "$REGISTRY_REPOSITORY" \
+            --location "$REGION" --project "$PROJECT_ID" \
+            --member "serviceAccount:$DEPLOYER_SA" --role roles/artifactregistry.writer
     fi
 fi
 

@@ -17,13 +17,19 @@ GITHUB_REPOSITORY_OWNER="M-oliveda"
 
 RUNTIME_SA_NAME="moliveda-web-runtime"
 
+# The Artifact Registry repository of each project (D20, 10.4): Docker images `app` and `gate`,
+# in the region of the service so pulls stay free. Its cleanup policies live in cleanup/ and
+# carry a version in their names: bump it when a policy changes, so check.sh reports the old
+# ones and bootstrap.sh replaces them.
+REGISTRY_REPOSITORY="moliveda-web"
+
 # Production only: a dedicated deployer with a custom role that cannot delete services, so the
 # shared deployer of the production project is never changed (Phase 2 owner decision).
 PROD_DEPLOYER_SA_NAME="moliveda-web-deployer"
 PROD_DEPLOYER_ROLE_ID="molivedaWebDeployer"
 
 # APIs the services and the deploys use.
-REQUIRED_APIS="run.googleapis.com iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com logging.googleapis.com monitoring.googleapis.com cloudtrace.googleapis.com clouderrorreporting.googleapis.com"
+REQUIRED_APIS="run.googleapis.com artifactregistry.googleapis.com iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com logging.googleapis.com monitoring.googleapis.com cloudtrace.googleapis.com clouderrorreporting.googleapis.com"
 
 # Overrides from the caller's environment, captured once: load_environment sets the same names,
 # so reading them there would carry one environment's values into the next (`check.sh all`).
@@ -78,6 +84,15 @@ deployer_sa() {
         echo "${PROD_DEPLOYER_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
     else
         echo "$SHARED_DEPLOYER_SA"
+    fi
+}
+
+# The cleanup policy file of the loaded environment.
+cleanup_policy_file() {
+    if [ "$GITHUB_ENVIRONMENT" = "production" ]; then
+        echo "$GCP_DIR/cleanup/production.json"
+    else
+        echo "$GCP_DIR/cleanup/non-production.json"
     fi
 }
 

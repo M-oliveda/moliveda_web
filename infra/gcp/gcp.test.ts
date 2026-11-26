@@ -35,7 +35,7 @@ const PROVIDER_JSON = JSON.stringify({
 });
 // Matches gcloud subcommands that change something. `services list --enabled` must not match.
 const MUTATING =
-  /(^| )(create|enable|update|delete|add-iam-policy-binding|remove-iam-policy-binding|set-iam-policy|deploy|replace)( |$)/;
+  /(^| )(create|enable|update|delete|add-iam-policy-binding|remove-iam-policy-binding|set-iam-policy|set-cleanup-policies|delete-cleanup-policies|deploy|replace)( |$)/;
 
 interface IRunResult {
   readonly status: number | null;
@@ -61,7 +61,8 @@ function seedProject(): void {
   seed("sas", `${SHARED_DEPLOYER}\n`);
   seed(
     "policy-project",
-    `roles/run.admin\tserviceAccount:${SHARED_DEPLOYER}\n`
+    `roles/run.admin\tserviceAccount:${SHARED_DEPLOYER}\n` +
+      `roles/artifactregistry.writer\tserviceAccount:${SHARED_DEPLOYER}\n`
   );
 }
 
@@ -153,7 +154,20 @@ describe("bootstrap.sh", () => {
         expect.stringContaining(
           `--member principalSet://iam.googleapis.com/projects/${NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/${REPOSITORY} --role roles/iam.workloadIdentityUser`
         ),
+        `services enable artifactregistry.googleapis.com --project ${DEV_PROJECT}`,
+        expect.stringMatching(
+          new RegExp(
+            `^artifacts repositories create moliveda-web --repository-format docker --location us-central1 --project ${DEV_PROJECT} `
+          )
+        ),
+        expect.stringMatching(
+          /^artifacts repositories set-cleanup-policies moliveda-web --policy \S+\/cleanup\/non-production\.json --no-dry-run /
+        ),
       ])
+    );
+    // The shared deployer already pushes through its project role.
+    expect(mutatingCalls().join("\n")).not.toContain(
+      "artifacts repositories add-iam-policy-binding"
     );
     expect(mutatingCalls().join("\n")).not.toContain(
       "run.googleapis.com --project"
@@ -180,6 +194,10 @@ describe("bootstrap.sh", () => {
         expect.stringContaining(
           `projects add-iam-policy-binding ${PROD_PROJECT} --member serviceAccount:${PROD_DEPLOYER} --role projects/${PROD_PROJECT}/roles/molivedaWebDeployer --condition None`
         ),
+        expect.stringMatching(
+          /^artifacts repositories set-cleanup-policies moliveda-web --policy \S+\/cleanup\/production\.json --no-dry-run /
+        ),
+        `artifacts repositories add-iam-policy-binding moliveda-web --location us-central1 --project ${PROD_PROJECT} --member serviceAccount:${PROD_DEPLOYER} --role roles/artifactregistry.writer`,
       ])
     );
     expect(mutatingCalls().join("\n")).not.toContain(SHARED_DEPLOYER);
@@ -207,7 +225,44 @@ describe("bootstrap.sh", () => {
 
     expect(result.status).toBe(0);
     expect(result.output).toContain("would  gcloud services enable");
+    expect(result.output).toContain(
+      "would  gcloud artifacts repositories create moliveda-web"
+    );
+    expect(result.output).toMatch(/would {2}apply \S+non-production\.json/);
     expect(mutatingCalls()).toStrictEqual([]);
+  });
+
+  it("replaces stale cleanup policies and turns off dry run", () => {
+    run("bootstrap.sh", ["dev"]);
+    seed("policies", "delete-after-1d-v0\nkeep-newest-1-v1\n");
+    seed("dry-run", "True\n");
+    resetLog();
+
+    const result = run("bootstrap.sh", ["dev"]);
+
+    expect(result.status).toBe(0);
+    expect(mutatingCalls()).toStrictEqual([
+      `artifacts repositories delete-cleanup-policies moliveda-web --policynames delete-after-1d-v0 --location us-central1 --project ${DEV_PROJECT}`,
+      expect.stringMatching(
+        /^artifacts repositories set-cleanup-policies moliveda-web .*--no-dry-run/
+      ),
+    ]);
+    expect(readFileSync(join(state, "policies"), "utf8")).toBe(
+      "delete-after-1d-v1\nkeep-newest-1-v1\n"
+    );
+    expect(run("check.sh", ["dev"]).status).toBe(0);
+  });
+
+  it("reapplies the policies when only dry run is on", () => {
+    run("bootstrap.sh", ["dev"]);
+    seed("dry-run", "True\n");
+    resetLog();
+
+    run("bootstrap.sh", ["dev"]);
+
+    expect(mutatingCalls()).toStrictEqual([
+      expect.stringContaining("artifacts repositories set-cleanup-policies"),
+    ]);
   });
 
   it("refuses to change a provider that does not map the repository", () => {
@@ -266,7 +321,63 @@ describe("check.sh", () => {
       "DRIFT  Workload Identity binding for M-oliveda/moliveda_web is missing"
     );
     expect(result.output).toContain(`project number ${NUMBER}`);
+    expect(result.output).toContain(
+      "DRIFT  Artifact Registry repository moliveda-web is missing in us-central1"
+    );
     expect(mutatingCalls()).toStrictEqual([]);
+  });
+
+  it("reports the repository's format, policies and dry run", () => {
+    run("bootstrap.sh", ["dev"]);
+    resetLog();
+    seed("repo", "NPM\n");
+    seed("policies", "keep-everything\n");
+    seed("dry-run", "True\n");
+
+    const result = run("check.sh", ["dev"]);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain(
+      "repository moliveda-web has format 'NPM', expected DOCKER"
+    );
+    expect(result.output).toContain(
+      "cleanup policies are 'keep-everything ' (dry run: True), expected 'delete-after-1d-v1 keep-newest-1-v1 ' applied"
+    );
+    expect(mutatingCalls()).toStrictEqual([]);
+  });
+
+  it("requires the production deployer to push to the repository", () => {
+    run("bootstrap.sh", ["prod"]);
+    seed("policy-repo", "");
+
+    const result = run("check.sh", ["prod"]);
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain(
+      "production deployer lacks roles/artifactregistry.writer on moliveda-web"
+    );
+  });
+
+  it("accepts a repository binding and warns without any writer role for a shared deployer", () => {
+    run("bootstrap.sh", ["dev"]);
+    seed(
+      "policy-project",
+      `roles/run.admin\tserviceAccount:${SHARED_DEPLOYER}\n`
+    );
+
+    const warned = run("check.sh", ["dev"]);
+    expect(warned.status).toBe(0);
+    expect(warned.output).toContain(
+      "warn   shared deployer holds no Artifact Registry writer role directly"
+    );
+
+    seed(
+      "policy-repo",
+      `roles/artifactregistry.writer\tserviceAccount:${SHARED_DEPLOYER}\n`
+    );
+    expect(run("check.sh", ["dev"]).output).toContain(
+      "ok     deployer may push to moliveda-web"
+    );
   });
 
   it("never calls a mutating command, for every environment", () => {

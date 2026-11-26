@@ -122,6 +122,38 @@ check_shared_deployer() {
     fi
 }
 
+check_registry() {
+    if ! repository_exists; then
+        drift "Artifact Registry repository $REGISTRY_REPOSITORY is missing in $REGION"
+        return
+    fi
+    format="$(repository_settings | awk '{ print $1 }')"
+    if [ "$format" = "DOCKER" ]; then
+        ok "repository $REGISTRY_REPOSITORY exists"
+    else
+        drift "repository $REGISTRY_REPOSITORY has format '$format', expected DOCKER"
+    fi
+    if cleanup_policies_current; then
+        ok "cleanup policies match $(basename "$(cleanup_policy_file)") and delete images"
+    else
+        drift "cleanup policies are '$(cleanup_policy_names | tr '\n' ' ')' (dry run: $(repository_settings | awk '{ print $2 }')), expected '$(expected_cleanup_policy_names | tr '\n' ' ')' applied"
+    fi
+}
+
+# The deployer must be able to push images. Production: on the repository only (bootstrap.sh).
+check_registry_writer() {
+    if has_binding "$(repository_policy)" roles/artifactregistry.writer "serviceAccount:$DEPLOYER_SA"; then
+        ok "deployer may push to $REGISTRY_REPOSITORY"
+    elif [ "$GITHUB_ENVIRONMENT" = "production" ]; then
+        drift "production deployer lacks roles/artifactregistry.writer on $REGISTRY_REPOSITORY"
+    elif roles_of "$POLICY" "serviceAccount:$DEPLOYER_SA" | grep -Eq '^roles/artifactregistry\.(writer|repoAdmin|admin)$'; then
+        ok "shared deployer may push images (project role)"
+    else
+        # It may hold the permission through a custom role or a group, so this is not drift.
+        warn "shared deployer holds no Artifact Registry writer role directly"
+    fi
+}
+
 check_deployer_bindings() {
     if has_binding "$(sa_policy "$RUNTIME_SA")" roles/iam.serviceAccountUser "serviceAccount:$DEPLOYER_SA"; then
         ok "deployer may act as the runtime service account"
@@ -169,6 +201,7 @@ check_environment() {
     check_billing
     check_apis
     check_runtime_sa
+    check_registry
 
     if [ -z "$WIF_POOL" ] || [ -z "$WIF_PROVIDER" ] || {
         [ "$GITHUB_ENVIRONMENT" != "production" ] && [ -z "$SHARED_DEPLOYER_SA" ]
@@ -183,6 +216,7 @@ check_environment() {
     else
         check_shared_deployer
     fi
+    check_registry_writer
     check_deployer_bindings
 }
 
