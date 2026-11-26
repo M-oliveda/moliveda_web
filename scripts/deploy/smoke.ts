@@ -1,9 +1,9 @@
 /**
  * Post-deploy smoke test (MASTERPLAN 10.2 step 6). Gated environments: the probes answer
- * without credentials, `/` answers 401 without them and 200 with them, and every response
- * carries `X-Robots-Tag`. Production candidate: the probes answer, and `/` answers 403 without
- * the origin header and 200 with it. Phase 3 changes the production `/` to 307 (locale
- * redirect); the checks through `https://moliveda.dev` are added in Phase 7.
+ * without credentials, `/` answers 401 without them and redirects to `/en` with them, `/en`
+ * is served, and every response carries `X-Robots-Tag`. Production candidate: the probes
+ * answer, `/` answers 403 without the origin header and redirects to `/en` with it, and `/en`
+ * is served. The checks through `https://moliveda.dev` are added in Phase 7.
  *
  *   node scripts/deploy/smoke.ts <gated|production> <base URL>
  *
@@ -16,8 +16,13 @@ export interface ISmokeCheck {
   readonly path: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly expectStatus: number;
-  /** A response header that must contain this value (case-insensitive). */
-  readonly expectHeader?: { readonly name: string; readonly contains: string };
+  /** Response headers that must contain these values (case-insensitive). */
+  readonly expectHeaders?: readonly IExpectedHeader[];
+}
+
+export interface IExpectedHeader {
+  readonly name: string;
+  readonly contains: string;
 }
 
 export interface ISmokeResult {
@@ -47,7 +52,11 @@ export class SmokeConfigError extends Error {
   }
 }
 
-const NOINDEX = { name: "x-robots-tag", contains: "noindex" } as const;
+const NOINDEX: IExpectedHeader = { name: "x-robots-tag", contains: "noindex" };
+
+// `/` negotiates the locale (MASTERPLAN 4.1); asking for English makes the target fixed.
+const ENGLISH = { "accept-language": "en" } as const;
+const TO_ENGLISH: IExpectedHeader = { name: "location", contains: "/en" };
 
 function probes(): ISmokeCheck[] {
   return ["/health", "/ready"].map((path) => ({
@@ -73,20 +82,27 @@ export function smokeChecks(
       `${basicAuthUsername}:${basicAuthPassword}`
     ).toString("base64")}`;
     return [
-      ...probes().map((check) => ({ ...check, expectHeader: NOINDEX })),
+      ...probes().map((check) => ({ ...check, expectHeaders: [NOINDEX] })),
       {
         name: "/ asks for credentials",
         path: "/",
         headers: {},
         expectStatus: 401,
-        expectHeader: NOINDEX,
+        expectHeaders: [NOINDEX],
       },
       {
-        name: "/ is served with credentials",
+        name: "/ redirects to a locale with credentials",
         path: "/",
+        headers: { authorization, ...ENGLISH },
+        expectStatus: 307,
+        expectHeaders: [NOINDEX, TO_ENGLISH],
+      },
+      {
+        name: "/en is served with credentials",
+        path: "/en",
         headers: { authorization },
         expectStatus: 200,
-        expectHeader: NOINDEX,
+        expectHeaders: [NOINDEX],
       },
     ];
   }
@@ -102,8 +118,15 @@ export function smokeChecks(
       expectStatus: 403,
     },
     {
-      name: "/ is served with the origin header",
+      name: "/ redirects to a locale with the origin header",
       path: "/",
+      headers: { "x-origin-verify": secrets.originSecret, ...ENGLISH },
+      expectStatus: 307,
+      expectHeaders: [TO_ENGLISH],
+    },
+    {
+      name: "/en is served with the origin header",
+      path: "/en",
       headers: { "x-origin-verify": secrets.originSecret },
       expectStatus: 200,
     },
@@ -118,13 +141,13 @@ function evaluate(check: ISmokeCheck, response: Response): ISmokeResult {
       detail: `status ${String(response.status)}, expected ${String(check.expectStatus)}`,
     };
   }
-  if (check.expectHeader) {
-    const value = response.headers.get(check.expectHeader.name) ?? "";
-    if (!value.toLowerCase().includes(check.expectHeader.contains)) {
+  for (const expected of check.expectHeaders ?? []) {
+    const value = response.headers.get(expected.name) ?? "";
+    if (!value.toLowerCase().includes(expected.contains)) {
       return {
         check,
         ok: false,
-        detail: `header ${check.expectHeader.name} lacks "${check.expectHeader.contains}"`,
+        detail: `header ${expected.name} lacks "${expected.contains}"`,
       };
     }
   }

@@ -47,16 +47,27 @@ function header(init: RequestInit, name: string): string | undefined {
   return (init.headers as Record<string, string> | undefined)?.[name];
 }
 
-/** The gate as deployed: probes open, `/` behind basic auth, noindex everywhere. */
+/** The app's locale routing: `/` redirects to `/en`, pages are served. */
+function localizedApp(url: URL, headers: Record<string, string>): Response {
+  if (url.pathname === "/") {
+    return new Response(null, {
+      status: 307,
+      headers: { ...headers, Location: `${BASE_URL}/en` },
+    });
+  }
+  return new Response(null, { status: 200, headers });
+}
+
+/** The gate as deployed: probes open, pages behind basic auth, noindex everywhere. */
 function gate(url: URL, init: RequestInit): Response {
   const headers = { "X-Robots-Tag": "noindex, nofollow" };
   if (url.pathname === "/health" || url.pathname === "/ready") {
     return new Response("{}", { status: 200, headers });
   }
-  return new Response(null, {
-    status: header(init, "authorization") === undefined ? 401 : 200,
-    headers,
-  });
+  if (header(init, "authorization") === undefined) {
+    return new Response(null, { status: 401, headers });
+  }
+  return localizedApp(url, headers);
 }
 
 /** The production app behind the origin guard. */
@@ -64,9 +75,10 @@ function guardedApp(url: URL, init: RequestInit): Response {
   if (url.pathname === "/health" || url.pathname === "/ready") {
     return new Response("{}", { status: 200 });
   }
-  return new Response(null, {
-    status: header(init, "x-origin-verify") === ORIGIN_SECRET ? 200 : 403,
-  });
+  if (header(init, "x-origin-verify") !== ORIGIN_SECRET) {
+    return new Response(null, { status: 403 });
+  }
+  return localizedApp(url, {});
 }
 
 describe("smokeChecks", () => {
@@ -79,14 +91,22 @@ describe("smokeChecks", () => {
       ["/health", 200],
       ["/ready", 200],
       ["/", 401],
-      ["/", 200],
+      ["/", 307],
+      ["/en", 200],
     ]);
     expect(
-      checks.every((check) => check.expectHeader?.contains === "noindex")
+      checks.every((check) => check.expectHeaders?.[0]?.contains === "noindex")
     ).toBe(true);
+    const authorization = `Basic ${Buffer.from("reviewer:gate-password").toString("base64")}`;
     expect(checks[3]?.headers).toStrictEqual({
-      authorization: `Basic ${Buffer.from("reviewer:gate-password").toString("base64")}`,
+      authorization,
+      "accept-language": "en",
     });
+    expect(checks[3]?.expectHeaders?.[1]).toStrictEqual({
+      name: "location",
+      contains: "/en",
+    });
+    expect(checks[4]?.headers).toStrictEqual({ authorization });
   });
 
   it("checks the production origin guard", () => {
@@ -98,9 +118,14 @@ describe("smokeChecks", () => {
       ["/health", 200],
       ["/ready", 200],
       ["/", 403],
-      ["/", 200],
+      ["/", 307],
+      ["/en", 200],
     ]);
     expect(checks[3]?.headers).toStrictEqual({
+      "x-origin-verify": ORIGIN_SECRET,
+      "accept-language": "en",
+    });
+    expect(checks[4]?.headers).toStrictEqual({
       "x-origin-verify": ORIGIN_SECRET,
     });
   });
@@ -125,7 +150,7 @@ describe("runChecks", () => {
     );
 
     expect(results.every((result) => result.ok)).toBe(true);
-    expect(requests).toHaveLength(4);
+    expect(requests).toHaveLength(5);
     expect(requests.every(({ init }) => init.redirect === "manual")).toBe(true);
     expect(requests[0]?.url).toBe(`${BASE_URL}/health`);
   });
@@ -144,6 +169,7 @@ describe("runChecks", () => {
       true,
       true,
       true,
+      true,
     ]);
   });
 
@@ -158,6 +184,7 @@ describe("runChecks", () => {
       'header x-robots-tag lacks "noindex"',
       'header x-robots-tag lacks "noindex"',
       "status 200, expected 401",
+      "status 200, expected 307",
       'header x-robots-tag lacks "noindex"',
     ]);
 
@@ -171,7 +198,31 @@ describe("runChecks", () => {
       true,
       true,
       false,
+      false,
       true,
+    ]);
+  });
+
+  it("fails a redirect to the wrong locale", async () => {
+    const { fetch } = fakeFetch(
+      () =>
+        new Response(null, {
+          status: 307,
+          headers: { Location: `${BASE_URL}/fr` },
+        })
+    );
+    const [redirect] = smokeChecks("production", {
+      originSecret: ORIGIN_SECRET,
+    }).filter((check) => check.expectStatus === 307);
+
+    const results = await runChecks(
+      BASE_URL,
+      redirect === undefined ? [] : [redirect],
+      options(fetch, 1)
+    );
+
+    expect(results.map((result) => result.detail)).toStrictEqual([
+      'header location lacks "/en"',
     ]);
   });
 
@@ -236,7 +287,10 @@ describe("formatResult", () => {
     const lines = results.map(formatResult);
 
     expect(lines[3]).toBe(
-      "ok   GET /: / is served with credentials (status 200)"
+      "ok   GET /: / redirects to a locale with credentials (status 307)"
+    );
+    expect(lines[4]).toBe(
+      "ok   GET /en: /en is served with credentials (status 200)"
     );
     expect(lines.join("\n")).not.toContain("gate-password");
     expect(lines.join("\n")).not.toContain(
